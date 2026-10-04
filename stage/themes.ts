@@ -49,7 +49,7 @@ export function layoutFor(theme: StageTheme, aspect: number, bare: boolean): Sta
   if (bare) return { fill: 0.6, shiftX: 0, shiftY: 0, planetScale: 1.2, planetAt: [0.805, 0.404] };
   if (theme === 'a') {
     // desktop: figure ~65 % of the height, horizontal centre ≈ 0.66, feet near 0.86 (the warm mist of the plate)
-    if (aspect >= 1.15) return { fill: 0.65, shiftX: 0.16, shiftY: 0.035, planetScale: 1.2, planetAt: [0.805, 0.404] };
+    if (aspect >= 1.15) return { fill: 0.65, shiftX: 0.17, shiftY: 0.035, planetScale: 1.2, planetAt: [0.805, 0.404] };
     if (aspect < 0.9) return { fill: 0.52, halfWidth: 0.44, shiftX: 0, shiftY: 0.07, planetScale: 0.4, planetAt: [0.7, 0.5] };
     return { fill: 0.5, shiftX: 0, shiftY: 0.06, planetScale: 0.7, planetAt: [0.7, 0.45] };
   }
