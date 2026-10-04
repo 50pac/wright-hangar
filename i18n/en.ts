@@ -297,5 +297,14 @@ export const en = {
   "kit.token.verdigris": "verdigris",
   "kit.token.warn": "warn",
   "kit.token.danger": "danger",
-  "kit.token.oxide": "oxide"
+  "kit.token.oxide": "oxide",
+  "stage.title": "Baymax stage",
+  "stage.loading": "Loading model…",
+  "stage.error": "Model failed to load",
+  "stage.hints": "Key hints",
+  "stage.key.space": "Space",
+  "stage.hint.pause": "Pause / resume animation",
+  "stage.paused": "Animation paused",
+  "stage.reduced": "Reduced motion is on: animation holds the rest pose",
+  "stage.fps.switched": "Low frame rate, switched to the low-poly model"
 } satisfies Record<keyof typeof zh, string>;

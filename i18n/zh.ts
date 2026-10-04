@@ -295,5 +295,14 @@ export const zh = {
   "kit.token.verdigris": "verdigris",
   "kit.token.warn": "warn",
   "kit.token.danger": "danger",
-  "kit.token.oxide": "oxide"
+  "kit.token.oxide": "oxide",
+  "stage.title": "大白舞台",
+  "stage.loading": "正在加载模型……",
+  "stage.error": "模型加载失败",
+  "stage.hints": "键位提示",
+  "stage.key.space": "空格",
+  "stage.hint.pause": "暂停 / 继续动画",
+  "stage.paused": "动画已暂停",
+  "stage.reduced": "已开启减少动态：动画停在静止姿态",
+  "stage.fps.switched": "帧率偏低，已切换到低面数模型"
 } as const;
