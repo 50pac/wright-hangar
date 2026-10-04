@@ -304,5 +304,17 @@ export const zh = {
   "stage.hint.pause": "暂停 / 继续动画",
   "stage.paused": "动画已暂停",
   "stage.reduced": "已开启减少动态：动画停在静止姿态",
-  "stage.fps.switched": "帧率偏低，已切换到低面数模型"
+  "stage.fps.switched": "帧率偏低，已切换到低面数模型",
+  "stage.nav.label": "主导航",
+  "stage.nav.home": "首页",
+  "stage.nav.scan": "扫描",
+  "stage.nav.about": "关于",
+  "stage.nav.voice": "语音",
+  "stage.hero.title": "你好，我是大白",
+  "stage.hero.sub": "你哪里不舒服？",
+  "stage.hero.soon": "即将开放",
+  "stage.hero.cta": "开始扫描",
+  "stage.footer.word": "Care Station",
+  "stage.footer.line": "慢慢来，我就在这里。",
+  "stage.footer.note": "非官方粉丝作品，与迪士尼无关，仅供个人非商用。玩具式小游戏，不提供医疗建议。"
 } as const;

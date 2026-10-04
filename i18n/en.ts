@@ -306,5 +306,17 @@ export const en = {
   "stage.hint.pause": "Pause / resume animation",
   "stage.paused": "Animation paused",
   "stage.reduced": "Reduced motion is on: animation holds the rest pose",
-  "stage.fps.switched": "Low frame rate, switched to the low-poly model"
+  "stage.fps.switched": "Low frame rate, switched to the low-poly model",
+  "stage.nav.label": "Main navigation",
+  "stage.nav.home": "Home",
+  "stage.nav.scan": "Scan",
+  "stage.nav.about": "About",
+  "stage.nav.voice": "Voice",
+  "stage.hero.title": "Hello, I am Baymax",
+  "stage.hero.sub": "Where does it hurt?",
+  "stage.hero.soon": "Coming soon",
+  "stage.hero.cta": "Start scan",
+  "stage.footer.word": "Care Station",
+  "stage.footer.line": "Take your time. I am right here.",
+  "stage.footer.note": "Unofficial fan work, not affiliated with Disney, personal non-commercial use only. A toy game, not medical advice."
 } satisfies Record<keyof typeof zh, string>;

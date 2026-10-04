@@ -21,3 +21,6 @@ export const EXPECTED_MESH_ROLES: Record<string, MaterialRole> = {
   Chest_Cover: 'chestCover', Chest_Cover_Division: 'chestRecess', Chest_Recess: 'chestRecess',
   Eye_L: 'eye', Eye_R: 'eye', Eye_Line: 'eye',
 };
+
+/** The character has no mouth or nose; anything matching is hidden if a future model ever ships one. */
+export const HIDDEN_MESH_PATTERN = /mouth|nose|nostril|lip|teeth|tongue/i;

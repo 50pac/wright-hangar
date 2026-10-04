@@ -5,10 +5,10 @@ import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { MeshoptDecoder } from 'meshoptimizer';
 import { expect, it } from 'vitest';
 import { FpsGuard } from './fpsGuard';
-import { classifyMaterial, EXPECTED_MESH_ROLES } from './materialRoles';
+import { classifyMaterial, EXPECTED_MESH_ROLES, HIDDEN_MESH_PATTERN } from './materialRoles';
 import { createStageMaterial, STAGE_COLORS } from './materials';
-import { BREATH, clipShouldAdvance, decorPose } from './motion';
-import { CLIP_NAME, isStageLocation, MODEL_URLS, parseStageParams } from './params';
+import { BREATH, POSE, clipShouldAdvance, decorPose } from './motion';
+import { CAMERA_FOV, CLIP_NAME, FRAME_FILL, TARGET, VIEW_PRESETS, cameraDistance, cameraPosition, isStageLocation, MODEL_URLS, parseStageParams } from './params';
 
 const modelPath = (lod: 'full' | 'low') => fileURLToPath(new URL(`../public${MODEL_URLS[lod]}`, import.meta.url));
 async function readGlb(lod: 'full' | 'low') {
@@ -71,21 +71,64 @@ it('keeps eyes matte black and the body matte white', () => {
 });
 
 it('parses stage URL params', () => {
-  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, fpsGuard: true, silhouette: false, debug: false });
+  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, t: null, bare: false, fpsGuard: true, silhouette: false, debug: false });
   expect(parseStageParams('?view=side&lod=low&still=1&fpsguard=0')).toMatchObject({ view: 'side', lod: 'low', still: true, fpsGuard: false });
   expect(parseStageParams('?view=bogus&lod=bogus').view).toBe('threeq');
+  expect(parseStageParams('?t=0.5').t).toBe(0.5);
+  expect(parseStageParams('?t=7').t).toBe(1);
+  expect(parseStageParams('?t=abc').t).toBeNull();
+  expect(parseStageParams('?bare=1').bare).toBe(true);
+  expect(parseStageParams('?silhouette=1').bare).toBe(true);
   expect(isStageLocation({ pathname: '/stage', search: '' })).toBe(true);
   expect(isStageLocation({ pathname: '/', search: '?stage' })).toBe(true);
   expect(isStageLocation({ pathname: '/', search: '' })).toBe(false);
 });
 
-it('reduced motion cuts decorative amplitude to at most half and freezes the clip', () => {
-  expect(BREATH.reducedFactor).toBeLessThanOrEqual(0.5);
-  const peak = (reduced: boolean) => Math.max(...Array.from({ length: 80 }, (_, i) => Math.abs(decorPose(i * 0.05, { reduced, still: false }).pitch)));
+it('uses a narrow lens, a slight look-down and ~60 % framing', () => {
+  expect(CAMERA_FOV).toBeGreaterThanOrEqual(28);
+  expect(CAMERA_FOV).toBeLessThanOrEqual(35);
+  for (const v of ['front', 'side', 'threeq'] as const) {
+    expect(VIEW_PRESETS[v].elevationDeg).toBeGreaterThan(3);
+    expect(VIEW_PRESETS[v].elevationDeg).toBeLessThan(15);
+    const [, y] = cameraPosition(v, 3);
+    expect(y).toBeGreaterThan(TARGET[1]); // camera above the look-at point
+  }
+  expect(FRAME_FILL).toBeGreaterThanOrEqual(0.55);
+  expect(FRAME_FILL).toBeLessThanOrEqual(0.65);
+  expect(cameraDistance(16 / 10)).toBeLessThan(cameraDistance(0.5)); // narrow viewports back off so the arms stay in frame
+});
+
+it('breath is slow and light; lean / head tilt match the brief; reduced motion keeps at most half and freezes the clip', () => {
+  expect(BREATH.hz).toBeCloseTo(0.2, 5);
+  expect(BREATH.scaleY).toBeLessThanOrEqual(0.015);
+  expect(POSE.leanDeg).toBeGreaterThanOrEqual(4);
+  expect(POSE.leanDeg).toBeLessThanOrEqual(5);
+  expect(POSE.headTiltDeg).toBeCloseTo(3, 1);
+  expect(POSE.reducedFactor).toBeLessThanOrEqual(0.5);
+  const samples = Array.from({ length: 200 }, (_, i) => i * 0.05);
+  const peak = (reduced: boolean) => Math.max(...samples.map(t => Math.abs(decorPose(t, { reduced, frozen: false }).scaleY - 1)));
+  expect(peak(false)).toBeLessThanOrEqual(0.015);
   expect(peak(true)).toBeLessThanOrEqual(peak(false) * 0.5);
-  expect(decorPose(1, { reduced: false, still: true })).toEqual({ scaleY: 1, pitch: 0, amplitudeFactor: 0 });
-  expect(clipShouldAdvance({ reduced: false, still: false, paused: false })).toBe(true);
-  for (const o of [{ reduced: true, still: false, paused: false }, { reduced: false, still: true, paused: false }, { reduced: false, still: false, paused: true }]) expect(clipShouldAdvance(o)).toBe(false);
+  const full = decorPose(1, { reduced: false, frozen: false }), red = decorPose(1, { reduced: true, frozen: false });
+  expect(red.leanRad).toBeLessThanOrEqual(full.leanRad * 0.5);
+  expect(red.headTiltRad).toBeLessThanOrEqual(full.headTiltRad * 0.5);
+  const frozen = decorPose(1, { reduced: false, frozen: true });
+  expect(frozen.scaleY).toBe(1); // no breath while frozen, static pose kept
+  expect(frozen.leanRad).toBeCloseTo((4.5 * Math.PI) / 180, 6);
+  expect(clipShouldAdvance({ reduced: false, fixed: false, paused: false })).toBe(true);
+  for (const o of [{ reduced: true, fixed: false, paused: false }, { reduced: false, fixed: true, paused: false }, { reduced: false, fixed: false, paused: true }]) expect(clipShouldAdvance(o)).toBe(false);
+});
+
+it('the model ships no mouth or nose (and any such mesh would be hidden)', async () => {
+  const doc = await readGlb('full');
+  const names = [...doc.getRoot().listMeshes().map(m => m.getName()), ...doc.getRoot().listNodes().map(n => n.getName())];
+  expect(names.filter(n => HIDDEN_MESH_PATTERN.test(n))).toEqual([]);
+  expect(HIDDEN_MESH_PATTERN.test('Mouth_01')).toBe(true);
+});
+
+it('the head is an independent bone', async () => {
+  const doc = await readGlb('full');
+  expect(doc.getRoot().listSkins()[0].listJoints().map(j => j.getName())).toContain('Bone_Head');
 });
 
 it('FPS guard fires once after 3 s below 40 fps and not for healthy or recovering frame rates', () => {
