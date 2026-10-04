@@ -7,8 +7,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { CAMERA_FOV, CLIP_NAME, MODEL_URLS, TARGET, cameraDistance, cameraPosition, type StageLod, type StageParams } from './params';
-import { THEME_LOOK, layoutFor, type ThemeLook } from './themes';
+import { CAMERA_FOV, CLIP_NAME, MODEL_HEIGHT, MODEL_URLS, TARGET, cameraDistance, cameraPosition, type StageLod, type StageParams } from './params';
+import { THEME_LOOK, layoutFor, type StageLayout, type ThemeLook } from './themes';
 import { FINAL_VALUES, type IntroValues } from './intro';
 import { HIDDEN_MESH_PATTERN, classifyMaterial, type MaterialRole } from './materialRoles';
 import { createStageMaterial } from './materials';
@@ -16,7 +16,8 @@ import { clipShouldAdvance, decorPose } from './motion';
 import { FpsGuard } from './fpsGuard';
 
 /** Planet placement in world units (model height 1, stands on y=0, faces +z); camera shares it. */
-const PLANET = { x: -0.45, y: 0.5, z: -1.6 };
+const PLANET = { x: -0.45, y: 0.5, z: -2.5 };
+const PLANET_R = 0.62;
 
 export type StageStats = {
   ready: boolean; error: string | null; lod: StageLod; view: string; still: boolean; fixedClipFraction: number | null; paused: boolean; reduced: boolean;
@@ -30,17 +31,20 @@ export type StageStats = {
   model: { meshes: number; skinnedMeshes: number; bones: number; clip: string | null; roles: Record<string, string>; unmapped: string[]; hidden: string[] };
   bounds: { min: number[]; max: number[] } | null;
   eyeScreen: { l: number[]; r: number[] } | null;
-  chip: number[] | null; theme: string; intro: { warm: number; push: number; planet: number };
-  planet: { screen: { x: number; y: number; r: number } | null };
+  chip: number[] | null; theme: string; intro: { warm: number; push: number; plate: number };
+  planet: { screen: { x: number; y: number; r: number } | null; world?: { centre: number[]; ringNearestZ: number }; ringPoly?: number[][] };
 };
+
+/** Screen-space anchors (px, relative to the canvas): chest light (x, y), canvas size (w, h), feet centre and top of the head. */
+export type ChipFrame = { x: number; y: number; w: number; h: number; foot: { x: number; y: number }; top: { x: number; y: number } };
 
 export type EngineHooks = {
   onPausedChange?: (paused: boolean) => void;
   onFpsSwitch?: () => void;
   onReady?: (lod: StageLod) => void;
   onError?: (message: string) => void;
-  /** Called every rendered frame with the screen position (px, relative to the canvas) of the chest light. */
-  onFrame?: (chip: { x: number; y: number; w: number; h: number }) => void;
+  /** Called every rendered frame with the screen position (px, relative to the canvas) of the chest light, the feet and the top of the head. */
+  onFrame?: (chip: ChipFrame) => void;
 };
 
 export class StageEngine {
@@ -50,11 +54,14 @@ export class StageEngine {
   readonly controls: OrbitControls;
   private readonly wrapper = new Group();
   private readonly look: ThemeLook;
-  private hemi!: HemisphereLight; private rimLight!: DirectionalLight; private warmLight!: PointLight; private planetGroup: Group | null = null;
-  private planetMat: ShaderMaterial | null = null; private ringMat: MeshBasicMaterial | null = null;
+  private hemi!: HemisphereLight; private rimLight!: DirectionalLight; private fillLight!: DirectionalLight; private warmLight!: PointLight; private planetGroup: Group | null = null;
+  private planetMat: ShaderMaterial | null = null; private ringMat: ShaderMaterial | null = null;
   private readonly bodyMats: { mat: MeshPhysicalMaterial; base: number }[] = [];
   private iv: IntroValues = FINAL_VALUES;
   private chipLocal = new Vector3(0, 0.62, 0.2);
+  /** The chest recess surface itself (the light hangs `offsetZ` in front of it); the CSS halo and the intro spark are centred here. */
+  private readonly chestLocal = new Vector3(0, 0.62, 0);
+  private readonly footLocal = new Vector3(0, 0, 0.02); private readonly topLocal = new Vector3(0, MODEL_HEIGHT, 0);
   private readonly tmpV = new Vector3();
   private readonly guard = new FpsGuard();
   private readonly loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
@@ -115,7 +122,7 @@ export class StageEngine {
       guard: { enabled: params.fpsGuard && !params.silhouette, switched: false },
       canvas: { width: 0, height: 0, cameraDistance: 0, fov: CAMERA_FOV },
       model: { meshes: 0, skinnedMeshes: 0, bones: 0, clip: null, roles: {}, unmapped: [], hidden: [] }, bounds: null, eyeScreen: null,
-      chip: null, theme: params.theme, intro: { warm: 1, push: 1, planet: 1 }, planet: { screen: null },
+      chip: null, theme: params.theme, intro: { warm: 1, push: 1, plate: 1 }, planet: { screen: null },
     };
     if (params.debug || import.meta.env?.DEV) { const w = window as unknown as { __baymaxStage?: StageStats; __baymaxEngine?: StageEngine }; w.__baymaxStage = this.stats; w.__baymaxEngine = this; }
 
@@ -140,13 +147,20 @@ export class StageEngine {
     this.rimLight = new DirectionalLight(new Color(L.rim.color), L.rim.intensity);
     this.rimLight.position.set(2.2, 1.6, -2.4);
     this.scene.add(this.rimLight);
+    this.fillLight = new DirectionalLight(new Color(L.fill.color), L.fill.intensity);
+    this.fillLight.position.set(-2.0, 1.4, 3.0);
+    this.scene.add(this.fillLight);
     this.warmLight = new PointLight(new Color(L.warm.color), L.warm.intensity, L.warm.distance, L.warm.decay);
     this.warmLight.position.copy(this.chipLocal);
     this.wrapper.add(this.warmLight); // follows the lean / breath of the body
     if (L.planet) this.buildPlanet();
   }
 
-  /** Low-poly planet + ring behind the figure, procedural gradient #c9a27a → #5a3d2b → #120d0a; shares the camera, so it parallaxes when orbiting. */
+  /**
+   * Low-poly planet + ring behind the figure, procedural gradient #c9a27a → #5a3d2b → #120d0a; shares the camera, so it parallaxes when orbiting.
+   * Depth: the planet sits well behind Baymax (ring's nearest point stays behind his back), the ring's far half is hidden by the ball
+   * (depth test), its near half crosses in front of the ball, and the ball casts a shadow on the ring; the ring also darkens towards the ball.
+   */
   private buildPlanet() {
     const g = new Group();
     this.planetMat = new ShaderMaterial({
@@ -163,30 +177,58 @@ export class StageEngine {
           gl_FragColor = vec4(c, uOpacity);
         }`,
     });
-    const ball = new Mesh(new SphereGeometry(0.62, 40, 28), this.planetMat);
+    const ball = new Mesh(new SphereGeometry(PLANET_R, 40, 28), this.planetMat); ball.renderOrder = 1;
     const c = document.createElement('canvas'); c.width = 512; c.height = 4;
     const cx = c.getContext('2d')!; const grad = cx.createLinearGradient(0, 0, 512, 0);
     [[0, 'rgba(201,162,122,0)'], [0.08, 'rgba(201,162,122,.55)'], [0.3, 'rgba(201,162,122,.85)'], [0.42, 'rgba(90,61,43,.35)'], [0.5, 'rgba(201,162,122,.7)'], [0.75, 'rgba(160,126,92,.55)'], [0.92, 'rgba(90,61,43,.25)'], [1, 'rgba(90,61,43,0)']]
       .forEach(([o, col]) => grad.addColorStop(o as number, col as string));
     cx.fillStyle = grad; cx.fillRect(0, 0, 512, 4);
-    const ringTex = new CanvasTexture(c); ringTex.colorSpace = SRGBColorSpace;
+    const ringTex = new CanvasTexture(c); // raw sRGB values, sampled and written as is (no colour-space conversion)
     const ringGeo = new RingGeometry(0.86, 1.55, 96, 1);
     const uv = ringGeo.getAttribute('uv'), pos = ringGeo.getAttribute('position');
     for (let i = 0; i < uv.count; i++) { const r = Math.hypot(pos.getX(i), pos.getY(i)); uv.setXY(i, (r - 0.86) / (1.55 - 0.86), 0.5); }
-    this.ringMat = new MeshBasicMaterial({ map: ringTex, transparent: true, opacity: 0, side: DoubleSide, depthWrite: false, toneMapped: false });
-    const ring = new Mesh(ringGeo, this.ringMat); ring.rotation.x = -Math.PI / 2 + 0.38; ring.rotation.y = 0; ring.rotation.z = 0.18;
+    this.ringMat = new ShaderMaterial({
+      transparent: true, side: DoubleSide, depthWrite: false,
+      uniforms: { uMap: { value: ringTex }, uOpacity: { value: 0 }, uCenter: { value: new Vector3() }, uLight: { value: new Vector3(-0.5, 0.3, 0.8) }, uR: { value: PLANET_R } },
+      vertexShader: 'varying vec2 vUv; varying vec3 vW; void main(){ vUv = uv; vW = (modelMatrix * vec4(position,1.0)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW,1.0); }',
+      fragmentShader: `varying vec2 vUv; varying vec3 vW; uniform sampler2D uMap; uniform float uOpacity, uR; uniform vec3 uCenter, uLight;
+        void main(){
+          vec4 t = texture2D(uMap, vUv);
+          float nearBall = mix(0.4, 1.0, smoothstep(0.0, 0.4, vUv.x));          // darker close to the planet
+          vec3 s = vW - uCenter; vec3 L = normalize(uLight); float along = dot(s, L);
+          float perp = length(s - L * along);
+          float shadow = along < 0.0 ? 1.0 - smoothstep(uR * 0.85, uR * 1.08, perp) : 0.0;  // the ball's shadow falls on the ring behind it
+          gl_FragColor = vec4(t.rgb * nearBall * (1.0 - 0.72 * shadow), t.a * uOpacity * 0.9);
+        }`,
+    });
+    const ring = new Mesh(ringGeo, this.ringMat); ring.renderOrder = 2; ring.rotation.x = -Math.PI / 2 + 0.38; ring.rotation.z = 0.18;
     g.add(ball, ring);
-    g.position.set(PLANET.x, PLANET.y, PLANET.z); g.rotation.z = -0.1;
+    g.rotation.z = -0.1;
     this.planetGroup = g; this.scene.add(g);
   }
 
-  private layout = layoutFor('a', 1.6, true);
+  /** Planet centre: on the depth plane of its nominal world position, at the screen spot the layout asks for. */
+  private placePlanet() {
+    const g = this.planetGroup; if (!g) return;
+    g.scale.setScalar(this.layout.planetScale);
+    const at = this.layout.planetAt;
+    const base = new Vector3(PLANET.x + this.tune.planetX, PLANET.y + this.tune.planetY, PLANET.z + this.tune.planetZ);
+    if (!at) { g.position.copy(base); return; }
+    this.camera.updateMatrixWorld(true);
+    const fwd = new Vector3(); this.camera.getWorldDirection(fwd);
+    const depth = base.clone().sub(this.camera.position).dot(fwd);
+    const dir = new Vector3(at[0] * 2 - 1, 1 - at[1] * 2, 0.5).unproject(this.camera).sub(this.camera.position).normalize();
+    g.position.copy(this.camera.position).addScaledVector(dir, depth / dir.dot(fwd));
+  }
+
+  private layout: StageLayout = layoutFor('a', 1.6, true);
   private placeCamera() {
-    const d = cameraDistance(this.camera.aspect, CAMERA_FOV, this.layout.fill) * (1 + 0.06 * (1 - this.iv.push));
+    const d = cameraDistance(this.camera.aspect, CAMERA_FOV, this.layout.fill, this.layout.halfWidth) * (1 + 0.06 * (1 - this.iv.push));
     this.camera.position.set(...cameraPosition(this.params.view, d));
     this.camera.lookAt(...TARGET);
     this.controls.minDistance = d * 0.5; this.controls.maxDistance = d * 2.2;
     if (this.stats) this.stats.canvas.cameraDistance = +d.toFixed(4);
+    this.placePlanet();
   }
 
   private resize = () => {
@@ -211,7 +253,7 @@ export class StageEngine {
   }
 
   /** Dev-only multipliers (window.__baymaxEngine.tune) used to tune the look from measurements. */
-  readonly tune = { warm: 1, rim: 1, env: 1, hemi: 1, planetX: 0, planetY: 0, planetZ: 0 };
+  readonly tune = { warm: 1, fill: 1, rim: 1, env: 1, hemi: 1, planetX: 0, planetY: 0, planetZ: 0 };
   private warmBreath = 1;
   private applyLook() {
     if (this.params.silhouette) return;
@@ -219,20 +261,21 @@ export class StageEngine {
     const lit = Math.max(v.rim, v.warm);
     this.wrapper.visible = lit > 0.001; // before the first light the model is not drawn at all (no dark silhouette in the 0.4–1.2 s spark phase)
     this.rimLight.intensity = L.rim.intensity * v.rim * this.tune.rim;
+    this.fillLight.intensity = L.fill.intensity * lit * this.tune.fill;
     this.warmLight.intensity = L.warm.intensity * v.warm * this.warmBreath * this.tune.warm;
     this.hemi.intensity = L.hemi.intensity * lit * this.tune.hemi;
     this.scene.environmentIntensity = L.env * lit * this.tune.env; // three ≥ r163: material.envMapIntensity no longer scales scene.environment
-    if (this.planetGroup) this.planetGroup.position.set(PLANET.x + this.tune.planetX, PLANET.y + this.tune.planetY, PLANET.z + this.tune.planetZ);
-    if (this.planetMat) this.planetMat.uniforms.uOpacity.value = v.planet;
-    if (this.ringMat) this.ringMat.opacity = 0.9 * v.planet;
+    if (this.planetMat) this.planetMat.uniforms.uOpacity.value = v.plate;
+    if (this.ringMat) this.ringMat.uniforms.uOpacity.value = v.plate;
   }
 
   /** Screen position of a model-local point (px, relative to the canvas). */
-  projectChip() {
+  projectChip(): ChipFrame {
     const w = this.renderer.domElement.clientWidth, h = this.renderer.domElement.clientHeight;
     this.wrapper.updateMatrixWorld(true);
-    this.tmpV.copy(this.chipLocal).applyMatrix4(this.wrapper.matrixWorld).project(this.camera);
-    return { x: (this.tmpV.x * 0.5 + 0.5) * w, y: (-this.tmpV.y * 0.5 + 0.5) * h, w, h };
+    const at = (v: Vector3) => { this.tmpV.copy(v).applyMatrix4(this.wrapper.matrixWorld).project(this.camera); return { x: (this.tmpV.x * 0.5 + 0.5) * w, y: (-this.tmpV.y * 0.5 + 0.5) * h }; };
+    const chip = at(this.chestLocal);
+    return { ...chip, w, h, foot: at(this.footLocal), top: at(this.topLocal) };
   }
 
   private onVisibility = () => { this.guard.reset(performance.now()); this.lastNow = performance.now(); };
@@ -348,6 +391,7 @@ export class StageEngine {
     const pos = recess.geometry.getAttribute('position');
     for (let i = 0; i < pos.count; i++) { recess.getVertexPosition(i, v); v.applyMatrix4(recess.matrixWorld); min.min(v); max.max(v); }
     this.chipLocal.set((min.x + max.x) / 2, (min.y + max.y) / 2, max.z + this.look.warm.offsetZ);
+    this.chestLocal.set(this.chipLocal.x, this.chipLocal.y, max.z);
     this.warmLight?.position.copy(this.chipLocal);
     this.stats.chip = [this.chipLocal.x, this.chipLocal.y, this.chipLocal.z].map(n => +n.toFixed(4));
   }
@@ -405,14 +449,25 @@ export class StageEngine {
     this.applyLook();
     this.applyPose();
     this.renderOnce();
-    this.stats.intro = { warm: +this.iv.warm.toFixed(3), push: +this.iv.push.toFixed(3), planet: +this.iv.planet.toFixed(3) };
-    if (this.planetGroup && this.iv.planet > 0.01) {
+    this.stats.intro = { warm: +this.iv.warm.toFixed(3), push: +this.iv.push.toFixed(3), plate: +this.iv.plate.toFixed(3) };
+    if (this.planetGroup) {
       const w = this.renderer.domElement.clientWidth, h = this.renderer.domElement.clientHeight;
       this.planetGroup.updateMatrixWorld(true);
-      const c = this.tmpV.setFromMatrixPosition(this.planetGroup.matrixWorld).clone();
-      const right = new Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(0.62).add(c);
-      const pc = c.clone().project(this.camera), pr = right.project(this.camera);
-      this.stats.planet.screen = { x: (pc.x * 0.5 + 0.5) * w, y: (-pc.y * 0.5 + 0.5) * h, r: Math.abs(pr.x - pc.x) * 0.5 * w };
+      const c = new Vector3().setFromMatrixPosition(this.planetGroup.matrixWorld);
+      const R = PLANET_R * this.layout.planetScale;
+      if (this.ringMat) { // light comes from the upper left in view space (same as the ball's shading)
+        this.ringMat.uniforms.uCenter.value.copy(c); this.ringMat.uniforms.uR.value = R;
+        this.ringMat.uniforms.uLight.value.set(-0.55, 0.3, 0.78).transformDirection(this.camera.matrixWorld);
+      }
+      if (this.iv.plate > 0.01) {
+        const right = new Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(R).add(c);
+        const pc = c.clone().project(this.camera), pr = right.project(this.camera);
+        this.stats.planet.screen = { x: (pc.x * 0.5 + 0.5) * w, y: (-pc.y * 0.5 + 0.5) * h, r: Math.abs(pr.x - pc.x) * 0.5 * w };
+        const ringM = this.planetGroup.children[1].matrixWorld;
+        this.stats.planet.ringPoly = Array.from({ length: 48 }, (_, i) => { const a = i / 48 * Math.PI * 2; const q = new Vector3(Math.cos(a) * 1.55, Math.sin(a) * 1.55, 0).applyMatrix4(ringM).project(this.camera); return [+((q.x * 0.5 + 0.5) * w).toFixed(1), +((-q.y * 0.5 + 0.5) * h).toFixed(1)]; });
+        // ring (outer radius 1.55 × scale) nearest point to the camera, in world z, for the occlusion check against Baymax's back
+        this.stats.planet.world = { centre: c.toArray().map(n => +n.toFixed(3)), ringNearestZ: +(c.z + 1.55 * this.layout.planetScale * Math.cos(0.38)).toFixed(3) };
+      }
     }
     if (this.hooks.onFrame) { const c = this.projectChip(); this.hooks.onFrame(c); }
     if (this.eyes.length >= 2) this.stats.eyeScreen = { l: this.project(this.eyes[0]), r: this.project(this.eyes[1]) };

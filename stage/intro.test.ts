@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { FINAL_VALUES, INTRO, introClock, introState, introValues, shouldPlayIntro } from './intro';
 import { parseStageParams } from './params';
 import { THEME_LOOK, layoutFor } from './themes';
+import { CAMERA_FOV, MODEL_HEIGHT, cameraDistance } from './params';
 import { makeStars } from './Stars';
+import { makeMotes } from './Motes';
 
 const base = { readyAt: null as number | null, skipAt: null as number | null, failedAt: null as number | null };
 
@@ -14,14 +16,23 @@ describe('intro storyboard (pure timeline)', () => {
     expect(introValues(1.2).stars).toBeCloseTo(0.9, 5);
   });
 
-  it('lights (rim, then warm chest light), 6 % camera push, planet and UI follow the 1.2–2.2–3.2 s plan', () => {
+  it('lights (rim, then warm chest light), 6 % camera push, plate, HUD and UI follow the 1.2–2.2–3.2 s plan', () => {
     expect(introValues(1.2).warm).toBe(0);
     expect(introValues(1.6).rim).toBeGreaterThan(0.5); expect(introValues(1.6).warm).toBeLessThan(0.5);
     expect(introValues(2.2).warm).toBe(1);
     expect(introValues(2.2).title1).toBe(0); expect(introValues(3.2).button).toBe(1);
     const l = introValues(2.5); expect(l.title1).toBeGreaterThan(l.title2); // titles stagger
     expect(introValues(2.4).button).toBe(0); // the main button comes last
-    expect(introValues(3.2)).toMatchObject({ push: 1, planet: 1, nav: 1, title2: 1, sub: 1 });
+    expect(introValues(3.2)).toMatchObject({ push: 1, plate: 1, plateZoom: 1, hud: 1, nav: 1, title2: 1, sub: 1, egg: 1 });
+    expect(introValues(2.6).egg).toBeLessThan(introValues(2.6).button + 0.0001); // the easter egg is the last thing to appear
+  });
+
+  it('background plate: black until 0.4 s, 0.35 at 1.2 s while the 1.02 zoom eases back, 1 at 2.2 s; HUD orbit is drawn during 1.2–2.4 s', () => {
+    expect(introValues(0.3).plate).toBe(0); expect(introValues(0.4).plateZoom).toBeCloseTo(1.02, 5);
+    expect(introValues(1.2).plate).toBeCloseTo(0.35, 5); expect(introValues(2.2).plate).toBeCloseTo(1, 5);
+    expect(introValues(1.2).plateZoom).toBeLessThan(1.02); expect(introValues(1.2).plateZoom).toBeGreaterThan(1.0); expect(introValues(2.2).plateZoom).toBeCloseTo(1, 5);
+    expect(introValues(1.2).hud).toBe(0); expect(introValues(1.8).hud).toBeGreaterThan(0.2); expect(introValues(1.8).hud).toBeLessThan(0.8); expect(introValues(2.4).hud).toBe(1);
+    expect(FINAL_VALUES).toMatchObject({ plate: 1, plateZoom: 1, hud: 1, egg: 1 });
   });
 
   it('real duration = max(3.2 s, model ready): fast model → ends at 3.2 s; slow model → waits, then a short tail', () => {
@@ -82,19 +93,35 @@ describe('when the intro plays', () => {
 });
 
 describe('themes and layout numbers', () => {
+  it('phones (aspect < 0.9): figure fills >= 50 % of the viewport height', () => {
+    const l = layoutFor('a', 390 / 844, false);
+    expect(l.fill).toBeGreaterThanOrEqual(0.5); expect(l.halfWidth).toBeLessThan(0.62);
+    const d = cameraDistance(390 / 844, CAMERA_FOV, l.fill, l.halfWidth);
+    const frac = MODEL_HEIGHT / (2 * Math.tan(CAMERA_FOV * Math.PI / 360) * d);
+    expect(frac).toBeGreaterThanOrEqual(0.5); // height fraction actually realised at that distance
+  });
+
   it('theme A follows the visual-v3 recipe (warm chip light only on Baymax, cold rim, ACES 0.9)', () => {
     const a = THEME_LOOK.a;
-    expect(a.warm.color).toBe('#ffd9a0'); expect(a.warm.distance).toBe(3.2); expect(a.warm.decay).toBe(2); expect(a.warm.breathPeriod).toBe(6); expect(a.warm.breathAmp).toBeLessThanOrEqual(0.12);
-    expect(a.rim.color).toBe('#7dc0e8'); expect(a.hemi.sky).toBe('#1b2a44'); expect(a.hemi.ground).toBe('#0a0d14'); expect(a.exposure).toBe(0.9); expect(a.planet).toBe(true);
+    expect(a.warm.color).toBe('#ffe6c0'); expect(a.warm.distance).toBe(3.2); expect(a.warm.decay).toBe(2); expect(a.warm.breathPeriod).toBe(6); expect(a.warm.breathAmp).toBeLessThanOrEqual(0.12);
+    expect(a.rim.color).toBe('#7dc0e8'); expect(a.hemi.sky).toBe('#1b2a44'); expect(a.hemi.ground).toBe('#16233d'); expect(a.fill.intensity).toBeGreaterThan(0); expect(a.exposure).toBe(0.9); expect(a.planet).toBe(false); // planet is a painted background plate now
+    expect(a.warm.intensity).toBeGreaterThanOrEqual(0.5); expect(a.warm.intensity).toBeLessThanOrEqual(0.7); expect(a.rim.intensity).toBeGreaterThan(a.warm.intensity);
     expect(THEME_LOOK.b.planet).toBe(false);
   });
   it('desktop A shifts the figure right (text column on the left), B keeps it centred and lower', () => {
     expect(layoutFor('a', 1.6, false).shiftX).toBeGreaterThan(0.1);
     expect(layoutFor('b', 1.6, false).shiftX).toBe(0); expect(layoutFor('b', 1.6, false).shiftY).toBeGreaterThan(0);
-    expect(layoutFor('a', 1.6, true)).toEqual({ fill: 0.6, shiftX: 0, shiftY: 0 });
+    expect(layoutFor('a', 1.6, true)).toMatchObject({ fill: 0.6, shiftX: 0, shiftY: 0 });
   });
-  it('star field: 80 stars (40 on the low tier), deterministic, five near-white colours', () => {
-    expect(makeStars(80)).toHaveLength(80); expect(makeStars(80)).toEqual(makeStars(80));
-    expect(new Set(makeStars(80).map(s => s.rgb.join())).size).toBe(5);
+  it('desktop A: figure ~65 % tall, centred right of the middle', () => {
+    const l = layoutFor('a', 1.6, false);
+    expect(l.fill).toBeGreaterThanOrEqual(0.62); expect(l.fill).toBeLessThanOrEqual(0.68);
+    expect(0.5 + l.shiftX).toBeGreaterThanOrEqual(0.64); expect(0.5 + l.shiftX).toBeLessThanOrEqual(0.68);
+  });
+  it('star field: 50 fine stars (30 on the low tier), deterministic, five near-white colours; dust motes stay under 20', () => {
+    expect(makeStars(50)).toHaveLength(50); expect(makeStars(50)).toEqual(makeStars(50));
+    expect(new Set(makeStars(50).map(s => s.rgb.join())).size).toBe(5);
+    expect(Math.max(...makeStars(50).map(s => s.size))).toBeLessThanOrEqual(1.2);
+    expect(makeMotes(16)).toHaveLength(16); expect(makeMotes(16)).toEqual(makeMotes(16));
   });
 });

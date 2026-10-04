@@ -4,9 +4,10 @@
  *
  * Intro clock `c` (seconds) follows the storyboard:
  *   0–0.4   black + grain only (CSS, shown before JS / the model)
- *   0.4–1.2 a warm spark (4px) appears and drifts towards the chest chip, stars fade in 0 → .9
- *   1.2–2.2 (needs the model) rim light, then the warm chest light come up (0 → 1), camera pushes in 6 %, planet fades in
- *   2.2–3.2 title lines, nav (slides down) and finally the main button fade in
+ *   0.4–1.2 a warm spark (4px) appears at the lower right and breathes while it drifts towards the chest chip, stars fade in 0 → .9,
+ *           the painted background plate comes up 0 → .35 while its 1.02 zoom eases back
+ *   1.2–2.2 (needs the model) rim light, then the warm chest light come up (0 → 1), camera pushes in 6 %, the HUD orbit is drawn, plate 0.35 → 1
+ *   2.2–3.2 title lines, nav (slides down), the main button and finally the handwritten easter egg fade in
  * Real duration = the clock held at 1.2 until the model is ready (spark keeps breathing), then the rest runs in max(0.9, 3.2 − ready) s,
  * i.e. total ≈ max(3.2 s, model ready + 0.9 s).
  */
@@ -21,24 +22,24 @@ export const INTRO = {
 
 export type IntroValues = Readonly<{
   /** 0..1 → warm chest light (and hemisphere) */ warm: number;
-  rim: number; stars: number; planet: number; push: number;
+  rim: number; stars: number; /** background plate opacity */ plate: number; /** background plate zoom, 1.02 → 1 */ plateZoom: number; /** HUD orbit stroke progress */ hud: number; push: number;
   spark: number; sparkProgress: number;
-  title1: number; title2: number; sub: number; nav: number; button: number; ui: number;
+  title1: number; title2: number; sub: number; nav: number; button: number; egg: number; ui: number;
 }>;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 export const smooth = (a: number, b: number, x: number) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
 /** Final (post-intro) state: everything fully on. */
-export const FINAL_VALUES: IntroValues = { warm: 1, rim: 1, stars: 0.9, planet: 1, push: 1, spark: 0, sparkProgress: 1, title1: 1, title2: 1, sub: 1, nav: 1, button: 1, ui: 1 };
+export const FINAL_VALUES: IntroValues = { warm: 1, rim: 1, stars: 0.9, plate: 1, plateZoom: 1, hud: 1, push: 1, spark: 0, sparkProgress: 1, title1: 1, title2: 1, sub: 1, nav: 1, button: 1, egg: 1, ui: 1 };
 
 /** Values at intro-clock `c` (model assumed ready; before `hold` the model is not needed). */
 export function introValues(c: number): IntroValues {
   return {
-    warm: smooth(1.5, 2.2, c), rim: smooth(1.2, 1.8, c), stars: 0.9 * smooth(0.4, 1.2, c), planet: smooth(1.4, 2.4, c),
+    warm: smooth(1.5, 2.2, c), rim: smooth(1.2, 1.8, c), stars: 0.9 * smooth(0.4, 1.2, c), plate: 0.35 * smooth(0.4, 1.2, c) + 0.65 * smooth(1.2, 2.2, c), plateZoom: 1 + 0.02 * (1 - smooth(0.4, 2.2, c)), hud: smooth(1.2, 2.4, c),
     push: smooth(1.2, 3.2, c),
     spark: smooth(0.4, 0.8, c) * (1 - smooth(1.7, 2.3, c)), sparkProgress: smooth(0.4, 1.2, c),
-    title1: smooth(2.2, 2.7, c), title2: smooth(2.3, 2.8, c), sub: smooth(2.45, 2.95, c), nav: smooth(2.3, 2.8, c), button: smooth(2.7, 3.2, c), ui: smooth(2.2, 3.2, c),
+    title1: smooth(2.2, 2.7, c), title2: smooth(2.3, 2.8, c), sub: smooth(2.45, 2.95, c), nav: smooth(2.3, 2.8, c), button: smooth(2.7, 3.2, c), egg: smooth(2.85, 3.2, c), ui: smooth(2.2, 3.2, c),
   };
 }
 

@@ -9,12 +9,12 @@ function lcg(seed: number) { let s = seed >>> 0; return () => ((s = (Math.imul(s
 export function makeStars(count: number) {
   const r = lcg(20261005);
   return Array.from({ length: count }, () => ({
-    x: r(), y: r(), size: 0.5 + r() * 1.1, rgb: STAR_RGB[Math.floor(r() * STAR_RGB.length)],
-    phase: r() * Math.PI * 2, speed: 0.7 + r() * 0.8, base: 0.45 + r() * 0.5,
+    x: r(), y: r(), size: 0.4 + r() * 0.8, rgb: STAR_RGB[Math.floor(r() * STAR_RGB.length)],
+    phase: r() * Math.PI * 2, speed: 0.5 + r() * 0.6, base: 0.3 + r() * 0.5,
   }));
 }
 
-/** 2D canvas star field (mix-blend-mode: screen in CSS). ~80 stars, 40 on the low tier, DPR ≤ 2. Not mounted under reduced motion. */
+/** 2D canvas star field (mix-blend-mode: screen in CSS). ~50 stars (fine and restrained), 30 on the low tier, DPR ≤ 2. Not mounted under reduced motion. */
 export default function Stars({ count }: { count: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function Stars({ count }: { count: number }) {
         const x = s.x * w, y = s.y * h, rad = s.size * (w < 520 ? 0.7 : 1);
         ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
         ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
-        if (s.size > 1.3) { ctx.fillStyle = `rgba(${r},${g},${b},${a * 0.18})`; ctx.beginPath(); ctx.arc(x, y, rad * 3.2, 0, Math.PI * 2); ctx.fill(); }
+        if (s.size > 1.0) { ctx.fillStyle = `rgba(${r},${g},${b},${a * 0.14})`; ctx.beginPath(); ctx.arc(x, y, rad * 3, 0, Math.PI * 2); ctx.fill(); }
       }
       raf = requestAnimationFrame(draw);
     };

@@ -50,10 +50,10 @@ export const VIEW_PRESETS: Record<StageView, { azimuthDeg: number; elevationDeg:
 };
 
 /** Distance at which the model fills `fill` of the viewport height, widened if the viewport is too narrow for the arms. */
-export function cameraDistance(aspect: number, fovDeg = CAMERA_FOV, fill = FRAME_FILL): number {
+export function cameraDistance(aspect: number, fovDeg = CAMERA_FOV, fill = FRAME_FILL, halfWidth = 0.62): number {
   const tan = Math.tan((fovDeg * Math.PI) / 360);
   const byHeight = MODEL_HEIGHT / fill / 2 / tan;
-  const byWidth = 0.62 / (tan * Math.max(aspect, 0.2));
+  const byWidth = halfWidth / (tan * Math.max(aspect, 0.2));
   return Math.max(byHeight, byWidth) * DISTANCE_TRIM;
 }
 
