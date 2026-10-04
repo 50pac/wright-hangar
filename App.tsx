@@ -11,7 +11,7 @@ export default function App() {
     return <Suspense fallback={<main className="flex h-screen items-center justify-center bg-ink-0 text-bone">{t('s0.loading')}</main>}><KitPage/></Suspense>;
   }
   if (typeof window !== 'undefined' && isStageLocation(window.location)) {
-    return <Suspense fallback={<main className="flex h-screen items-center justify-center bg-ink-0 text-bone">{t('s0.loading')}</main>}><StagePage/></Suspense>;
+    return <Suspense fallback={<main className="flex h-screen items-center justify-center bg-ink-0 text-bone" style={{ background: '#06070d' }}/>}><StagePage/></Suspense>;
   }
   return <main aria-label={zh['s0.title']} className="flex h-screen min-h-screen items-center justify-center bg-ink-0"><h1 className="font-display text-step-6 font-extrabold tracking-[.04em] text-bone">{zh['s0.title']}</h1></main>;
 }

@@ -71,7 +71,7 @@ it('keeps eyes matte black and the body matte white', () => {
 });
 
 it('parses stage URL params', () => {
-  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, t: null, bare: false, fpsGuard: true, silhouette: false, debug: false });
+  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, t: null, bare: false, shellLayout: false, fpsGuard: true, silhouette: false, theme: 'a', intro: null, introT: null, debug: false });
   expect(parseStageParams('?view=side&lod=low&still=1&fpsguard=0')).toMatchObject({ view: 'side', lod: 'low', still: true, fpsGuard: false });
   expect(parseStageParams('?view=bogus&lod=bogus').view).toBe('threeq');
   expect(parseStageParams('?t=0.5').t).toBe(0.5);

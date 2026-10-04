@@ -1,17 +1,22 @@
 import {
-  AmbientLight, AnimationClip, AnimationMixer, CanvasTexture, Color, DirectionalLight, Group, HemisphereLight, Mesh, MeshBasicMaterial,
-  NeutralToneMapping, PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Quaternion, Scene, ShadowMaterial,
-  KeyframeTrack, SkinnedMesh, SRGBColorSpace, Vector3, WebGLRenderer, type Material, type Object3D,
+  ACESFilmicToneMapping, AnimationClip, AnimationMixer, CanvasTexture, Color, DirectionalLight, DoubleSide, Group, HemisphereLight, Mesh, MeshBasicMaterial,
+  PerspectiveCamera, PMREMGenerator, PointLight, Quaternion, RingGeometry, Scene, ShaderMaterial, SphereGeometry,
+  KeyframeTrack, SkinnedMesh, SRGBColorSpace, Vector3, WebGLRenderer, type Material, type MeshPhysicalMaterial, type Object3D,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CAMERA_FOV, CLIP_NAME, MODEL_URLS, TARGET, cameraDistance, cameraPosition, type StageLod, type StageParams } from './params';
+import { THEME_LOOK, layoutFor, type ThemeLook } from './themes';
+import { FINAL_VALUES, type IntroValues } from './intro';
 import { HIDDEN_MESH_PATTERN, classifyMaterial, type MaterialRole } from './materialRoles';
 import { createStageMaterial } from './materials';
 import { clipShouldAdvance, decorPose } from './motion';
 import { FpsGuard } from './fpsGuard';
+
+/** Planet placement in world units (model height 1, stands on y=0, faces +z); camera shares it. */
+const PLANET = { x: -0.45, y: 0.5, z: -1.6 };
 
 export type StageStats = {
   ready: boolean; error: string | null; lod: StageLod; view: string; still: boolean; fixedClipFraction: number | null; paused: boolean; reduced: boolean;
@@ -25,6 +30,8 @@ export type StageStats = {
   model: { meshes: number; skinnedMeshes: number; bones: number; clip: string | null; roles: Record<string, string>; unmapped: string[]; hidden: string[] };
   bounds: { min: number[]; max: number[] } | null;
   eyeScreen: { l: number[]; r: number[] } | null;
+  chip: number[] | null; theme: string; intro: { warm: number; push: number; planet: number };
+  planet: { screen: { x: number; y: number; r: number } | null };
 };
 
 export type EngineHooks = {
@@ -32,16 +39,9 @@ export type EngineHooks = {
   onFpsSwitch?: () => void;
   onReady?: (lod: StageLod) => void;
   onError?: (message: string) => void;
+  /** Called every rendered frame with the screen position (px, relative to the canvas) of the chest light. */
+  onFrame?: (chip: { x: number; y: number; w: number; h: number }) => void;
 };
-
-function radialTexture(stops: [number, string][], size = 256) {
-  const c = document.createElement('canvas'); c.width = c.height = size;
-  const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  for (const [o, col] of stops) grad.addColorStop(o, col);
-  g.fillStyle = grad; g.fillRect(0, 0, size, size);
-  const tex = new CanvasTexture(c); tex.colorSpace = SRGBColorSpace; return tex;
-}
 
 export class StageEngine {
   readonly renderer: WebGLRenderer;
@@ -49,6 +49,13 @@ export class StageEngine {
   readonly camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.05, 50);
   readonly controls: OrbitControls;
   private readonly wrapper = new Group();
+  private readonly look: ThemeLook;
+  private hemi!: HemisphereLight; private rimLight!: DirectionalLight; private warmLight!: PointLight; private planetGroup: Group | null = null;
+  private planetMat: ShaderMaterial | null = null; private ringMat: MeshBasicMaterial | null = null;
+  private readonly bodyMats: { mat: MeshPhysicalMaterial; base: number }[] = [];
+  private iv: IntroValues = FINAL_VALUES;
+  private chipLocal = new Vector3(0, 0.62, 0.2);
+  private readonly tmpV = new Vector3();
   private readonly guard = new FpsGuard();
   private readonly loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   private mixer: AnimationMixer | null = null;
@@ -77,10 +84,9 @@ export class StageEngine {
     this.renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.outputColorSpace = SRGBColorSpace;
-    this.renderer.toneMapping = NeutralToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.look = THEME_LOOK[params.theme];
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = this.look.exposure;
     this.renderer.setClearColor(0x000000, params.silhouette ? 1 : 0);
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
@@ -109,8 +115,9 @@ export class StageEngine {
       guard: { enabled: params.fpsGuard && !params.silhouette, switched: false },
       canvas: { width: 0, height: 0, cameraDistance: 0, fov: CAMERA_FOV },
       model: { meshes: 0, skinnedMeshes: 0, bones: 0, clip: null, roles: {}, unmapped: [], hidden: [] }, bounds: null, eyeScreen: null,
+      chip: null, theme: params.theme, intro: { warm: 1, push: 1, planet: 1 }, planet: { screen: null },
     };
-    if (params.debug || import.meta.env?.DEV) (window as unknown as { __baymaxStage?: StageStats }).__baymaxStage = this.stats;
+    if (params.debug || import.meta.env?.DEV) { const w = window as unknown as { __baymaxStage?: StageStats; __baymaxEngine?: StageEngine }; w.__baymaxStage = this.stats; w.__baymaxEngine = this; }
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
@@ -119,53 +126,114 @@ export class StageEngine {
     this.renderer.setAnimationLoop(this.frame);
   }
 
-  /** Soft studio: warm key from the upper left, cool blue fill from the right, cool sky bounce, floor shadow + contact blob. */
+  /**
+   * Night scene: cold hemisphere + cold rim from the back right, one warm point light hanging in front of the chest chip
+   * (the only warm source), dim IBL so the body keeps volume. Theme B swaps the balance (cool rim leads, warm chip is small) and drops the planet.
+   */
   private buildStageSet() {
+    const L = this.look;
     const env = new PMREMGenerator(this.renderer);
     this.scene.environment = env.fromScene(new RoomEnvironment(), 0.04).texture;
     env.dispose();
-    this.scene.add(new HemisphereLight(new Color('#C9D8FF'), new Color('#A39C94'), 0.85));
-    this.scene.add(new AmbientLight(new Color('#C4D3FF'), 0.1));
-    const key = new DirectionalLight(new Color('#FFF1E0'), 1.9);
-    key.position.set(-2.2, 3.0, 2.4);
-    key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
-    Object.assign(key.shadow.camera, { left: -1.5, right: 1.5, top: 1.7, bottom: -1.3, near: 0.5, far: 9 });
-    key.shadow.bias = -0.0004; key.shadow.normalBias = 0.012; key.shadow.radius = 5;
-    this.scene.add(key);
-    const fill = new DirectionalLight(new Color('#8DB0FF'), 0.95);
-    fill.position.set(2.8, 0.9, 1.8);
-    this.scene.add(fill);
-    const rim = new DirectionalLight(new Color('#BFD4FF'), 0.8);
-    rim.position.set(2.0, 1.8, -2.6);
-    this.scene.add(rim);
-
-    const shadowCatcher = new Mesh(new PlaneGeometry(6, 6), new ShadowMaterial({ color: new Color('#53638C'), opacity: 0.3, depthWrite: false }));
-    shadowCatcher.rotation.x = -Math.PI / 2; shadowCatcher.position.y = 0.0008; shadowCatcher.receiveShadow = true; shadowCatcher.renderOrder = 1;
-    const contact = new Mesh(new PlaneGeometry(0.86, 0.54), new MeshBasicMaterial({
-      map: radialTexture([[0, 'rgba(58,72,108,0.50)'], [0.5, 'rgba(58,72,108,0.22)'], [1, 'rgba(58,72,108,0)']]),
-      transparent: true, depthWrite: false, toneMapped: false,
-    }));
-    contact.rotation.x = -Math.PI / 2; contact.position.set(0, 0.0012, 0.02); contact.renderOrder = 2;
-    this.scene.add(shadowCatcher, contact);
+    this.hemi = new HemisphereLight(new Color(L.hemi.sky), new Color(L.hemi.ground), L.hemi.intensity);
+    this.scene.add(this.hemi);
+    this.rimLight = new DirectionalLight(new Color(L.rim.color), L.rim.intensity);
+    this.rimLight.position.set(2.2, 1.6, -2.4);
+    this.scene.add(this.rimLight);
+    this.warmLight = new PointLight(new Color(L.warm.color), L.warm.intensity, L.warm.distance, L.warm.decay);
+    this.warmLight.position.copy(this.chipLocal);
+    this.wrapper.add(this.warmLight); // follows the lean / breath of the body
+    if (L.planet) this.buildPlanet();
   }
 
+  /** Low-poly planet + ring behind the figure, procedural gradient #c9a27a → #5a3d2b → #120d0a; shares the camera, so it parallaxes when orbiting. */
+  private buildPlanet() {
+    const g = new Group();
+    this.planetMat = new ShaderMaterial({
+      transparent: true,
+      uniforms: { uOpacity: { value: 0 } },
+      vertexShader: 'varying vec3 vN; varying vec2 vUv; void main(){ vN = normalize(normalMatrix * normal); vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      fragmentShader: `varying vec3 vN; varying vec2 vUv; uniform float uOpacity;
+        void main(){
+          float l = clamp(dot(normalize(vN), normalize(vec3(-0.55, 0.3, 0.78))) * 0.5 + 0.5, 0.0, 1.0);
+          vec3 lit = vec3(0.788, 0.635, 0.478), mid = vec3(0.353, 0.239, 0.169), dark = vec3(0.071, 0.051, 0.039);
+          vec3 c = l > 0.5 ? mix(mid, lit, (l - 0.5) * 2.0) : mix(dark, mid, l * 2.0);
+          float band = 0.5 + 0.5 * sin(vUv.y * 38.0 + sin(vUv.y * 11.0) * 1.6);
+          c *= 0.9 + 0.12 * band;
+          gl_FragColor = vec4(c, uOpacity);
+        }`,
+    });
+    const ball = new Mesh(new SphereGeometry(0.62, 40, 28), this.planetMat);
+    const c = document.createElement('canvas'); c.width = 512; c.height = 4;
+    const cx = c.getContext('2d')!; const grad = cx.createLinearGradient(0, 0, 512, 0);
+    [[0, 'rgba(201,162,122,0)'], [0.08, 'rgba(201,162,122,.55)'], [0.3, 'rgba(201,162,122,.85)'], [0.42, 'rgba(90,61,43,.35)'], [0.5, 'rgba(201,162,122,.7)'], [0.75, 'rgba(160,126,92,.55)'], [0.92, 'rgba(90,61,43,.25)'], [1, 'rgba(90,61,43,0)']]
+      .forEach(([o, col]) => grad.addColorStop(o as number, col as string));
+    cx.fillStyle = grad; cx.fillRect(0, 0, 512, 4);
+    const ringTex = new CanvasTexture(c); ringTex.colorSpace = SRGBColorSpace;
+    const ringGeo = new RingGeometry(0.86, 1.55, 96, 1);
+    const uv = ringGeo.getAttribute('uv'), pos = ringGeo.getAttribute('position');
+    for (let i = 0; i < uv.count; i++) { const r = Math.hypot(pos.getX(i), pos.getY(i)); uv.setXY(i, (r - 0.86) / (1.55 - 0.86), 0.5); }
+    this.ringMat = new MeshBasicMaterial({ map: ringTex, transparent: true, opacity: 0, side: DoubleSide, depthWrite: false, toneMapped: false });
+    const ring = new Mesh(ringGeo, this.ringMat); ring.rotation.x = -Math.PI / 2 + 0.38; ring.rotation.y = 0; ring.rotation.z = 0.18;
+    g.add(ball, ring);
+    g.position.set(PLANET.x, PLANET.y, PLANET.z); g.rotation.z = -0.1;
+    this.planetGroup = g; this.scene.add(g);
+  }
+
+  private layout = layoutFor('a', 1.6, true);
   private placeCamera() {
-    const d = cameraDistance(this.camera.aspect);
+    const d = cameraDistance(this.camera.aspect, CAMERA_FOV, this.layout.fill) * (1 + 0.06 * (1 - this.iv.push));
     this.camera.position.set(...cameraPosition(this.params.view, d));
     this.camera.lookAt(...TARGET);
     this.controls.minDistance = d * 0.5; this.controls.maxDistance = d * 2.2;
-    this.stats && (this.stats.canvas.cameraDistance = +d.toFixed(4));
+    if (this.stats) this.stats.canvas.cameraDistance = +d.toFixed(4);
   }
 
   private resize = () => {
     const w = Math.max(1, this.host.clientWidth), h = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = '100%'; this.renderer.domElement.style.height = '100%';
-    this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+    this.camera.aspect = w / h;
+    this.layout = layoutFor(this.params.theme, w / h, this.params.bare && !this.params.shellLayout);
+    if (this.layout.shiftX || this.layout.shiftY) this.camera.setViewOffset(w, h, -this.layout.shiftX * w, -this.layout.shiftY * h, w, h); else this.camera.clearViewOffset();
+    this.camera.updateProjectionMatrix();
     if (!this.userMoved) { this.placeCamera(); this.controls.update(); }
     if (this.stats) { this.stats.canvas.width = w; this.stats.canvas.height = h; }
   };
+
+  /** Intro storyboard values (null = final look). Lights come up, camera pushes in 6 %, planet fades in. */
+  setIntro(v: IntroValues | null) {
+    const next = v ?? FINAL_VALUES;
+    const pushChanged = next.push !== this.iv.push;
+    this.iv = next;
+    if (pushChanged && !this.userMoved) { this.placeCamera(); this.controls.update(); }
+    this.applyLook();
+  }
+
+  /** Dev-only multipliers (window.__baymaxEngine.tune) used to tune the look from measurements. */
+  readonly tune = { warm: 1, rim: 1, env: 1, hemi: 1, planetX: 0, planetY: 0, planetZ: 0 };
+  private warmBreath = 1;
+  private applyLook() {
+    if (this.params.silhouette) return;
+    const L = this.look, v = this.iv;
+    const lit = Math.max(v.rim, v.warm);
+    this.wrapper.visible = lit > 0.001; // before the first light the model is not drawn at all (no dark silhouette in the 0.4–1.2 s spark phase)
+    this.rimLight.intensity = L.rim.intensity * v.rim * this.tune.rim;
+    this.warmLight.intensity = L.warm.intensity * v.warm * this.warmBreath * this.tune.warm;
+    this.hemi.intensity = L.hemi.intensity * lit * this.tune.hemi;
+    this.scene.environmentIntensity = L.env * lit * this.tune.env; // three ≥ r163: material.envMapIntensity no longer scales scene.environment
+    if (this.planetGroup) this.planetGroup.position.set(PLANET.x + this.tune.planetX, PLANET.y + this.tune.planetY, PLANET.z + this.tune.planetZ);
+    if (this.planetMat) this.planetMat.uniforms.uOpacity.value = v.planet;
+    if (this.ringMat) this.ringMat.opacity = 0.9 * v.planet;
+  }
+
+  /** Screen position of a model-local point (px, relative to the canvas). */
+  projectChip() {
+    const w = this.renderer.domElement.clientWidth, h = this.renderer.domElement.clientHeight;
+    this.wrapper.updateMatrixWorld(true);
+    this.tmpV.copy(this.chipLocal).applyMatrix4(this.wrapper.matrixWorld).project(this.camera);
+    return { x: (this.tmpV.x * 0.5 + 0.5) * w, y: (-this.tmpV.y * 0.5 + 0.5) * h, w, h };
+  }
 
   private onVisibility = () => { this.guard.reset(performance.now()); this.lastNow = performance.now(); };
 
@@ -203,8 +271,9 @@ export class StageEngine {
       this.stats.timings.transferBytes = entry ? entry.transferSize || entry.encodedBodySize : null;
       this.swapModel(gltf.scene, gltf.animations);
       this.guard.reset(performance.now());
-      this.applyPose(); this.renderOnce();
-      this.renderer.getContext().finish();
+      // First render with the model visible even if the intro keeps it dark, so shader compilation is paid here (and counted), not in the middle of the intro.
+      this.wrapper.visible = true; this.applyPose(); this.renderOnce(); this.renderer.getContext().finish(); this.renderer.clear();
+      this.applyLook();
       this.stats.timings.firstFrameMs = Math.round(performance.now() - t0);
       this.stats.ready = true;
       this.hooks.onReady?.(lod);
@@ -216,6 +285,7 @@ export class StageEngine {
   }
 
   private swapModel(scene: Object3D, clips: AnimationClip[]) {
+    this.bodyMats.length = 0;
     if (this.model) {
       this.wrapper.remove(this.model);
       this.model.traverse(o => { const m = o as Mesh; if (m.isMesh) { m.geometry.dispose(); (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => x.dispose()); } });
@@ -236,13 +306,14 @@ export class StageEngine {
         roles[mesh.name] = `${src.name} → ${role}`;
         const next = createStageMaterial(role, src.name);
         src.dispose(); mesh.material = next;
+        this.bodyMats.push({ mat: next, base: next.envMapIntensity });
         mesh.castShadow = role !== 'eye'; mesh.receiveShadow = role === 'body' || role === 'chestCover';
         if (role === 'eye' && mesh.name.toLowerCase() !== 'eye_line') this.eyes.push(mesh);
       }
       mesh.frustumCulled = false; // skinned bind-pose bounds don't follow the arms
     });
     if (this.params.silhouette) {
-      const flat = new MeshBasicMaterial({ color: 0xffffff });
+      const flat = new MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
       scene.traverse(o => { const m = o as Mesh; if (m.isMesh) m.material = flat; });
     }
     this.model = scene; this.wrapper.add(scene);
@@ -265,6 +336,20 @@ export class StageEngine {
     scene.updateMatrixWorld(true);
     scene.traverse(o => { const m = o as SkinnedMesh; if (m.isSkinnedMesh) m.skeleton.update(); });
     this.stats.bounds = this.measureBounds(scene);
+    this.locateChip(scene);
+    this.applyLook();
+  }
+
+  /** Warm light hangs `offsetZ` in front of the centre of the chest recess (the "chip"). */
+  private locateChip(scene: Object3D) {
+    const recess = scene.getObjectByName('Chest_Recess') as SkinnedMesh | undefined;
+    if (!recess) return;
+    const v = new Vector3(), min = new Vector3(Infinity, Infinity, Infinity), max = new Vector3(-Infinity, -Infinity, -Infinity);
+    const pos = recess.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) { recess.getVertexPosition(i, v); v.applyMatrix4(recess.matrixWorld); min.min(v); max.max(v); }
+    this.chipLocal.set((min.x + max.x) / 2, (min.y + max.y) / 2, max.z + this.look.warm.offsetZ);
+    this.warmLight?.position.copy(this.chipLocal);
+    this.stats.chip = [this.chipLocal.x, this.chipLocal.y, this.chipLocal.z].map(n => +n.toFixed(4));
   }
 
   private measureBounds(scene: Object3D) {
@@ -316,8 +401,20 @@ export class StageEngine {
     const dt = Math.min(Math.max((now - (this.lastNow || now)) / 1000, 0), 0.5); this.lastNow = now;
     if (clipShouldAdvance({ reduced: this.reduced, fixed: this.fixedFraction !== null, paused: this.paused })) this.animTime += dt;
     if (!this.paused && this.fixedFraction === null) this.decorTime += dt; // breath keeps running (at reduced amplitude) under reduced motion
+    this.warmBreath = this.reduced || this.paused || this.fixedFraction !== null ? 1 : 1 + this.look.warm.breathAmp * Math.sin((2 * Math.PI * this.decorTime) / this.look.warm.breathPeriod);
+    this.applyLook();
     this.applyPose();
     this.renderOnce();
+    this.stats.intro = { warm: +this.iv.warm.toFixed(3), push: +this.iv.push.toFixed(3), planet: +this.iv.planet.toFixed(3) };
+    if (this.planetGroup && this.iv.planet > 0.01) {
+      const w = this.renderer.domElement.clientWidth, h = this.renderer.domElement.clientHeight;
+      this.planetGroup.updateMatrixWorld(true);
+      const c = this.tmpV.setFromMatrixPosition(this.planetGroup.matrixWorld).clone();
+      const right = new Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(0.62).add(c);
+      const pc = c.clone().project(this.camera), pr = right.project(this.camera);
+      this.stats.planet.screen = { x: (pc.x * 0.5 + 0.5) * w, y: (-pc.y * 0.5 + 0.5) * h, r: Math.abs(pr.x - pc.x) * 0.5 * w };
+    }
+    if (this.hooks.onFrame) { const c = this.projectChip(); this.hooks.onFrame(c); }
     if (this.eyes.length >= 2) this.stats.eyeScreen = { l: this.project(this.eyes[0]), r: this.project(this.eyes[1]) };
     if (this.stats.ready && this.stats.guard.enabled) {
       const r = this.guard.tick(performance.now()); this.stats.fps = +r.fps.toFixed(2);

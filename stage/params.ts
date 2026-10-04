@@ -1,5 +1,6 @@
 export type StageView = 'front' | 'side' | 'threeq';
 export type StageLod = 'full' | 'low';
+export type StageTheme = 'a' | 'b';
 
 export type StageParams = Readonly<{
   view: StageView;
@@ -10,10 +11,18 @@ export type StageParams = Readonly<{
   t: number | null;
   /** ?bare=1 → stage only, without the page shell (for reviewing the model on its own). */
   bare: boolean;
+  /** ?shell=1 with ?bare=1 / ?silhouette=1 → use the page-shell framing (figure shifted for the text column). For layout measurements. */
+  shellLayout: boolean;
   /** FPS guard (auto-switch to the low model). On by default, `?fpsguard=0` is the dev opt-out. */
   fpsGuard: boolean;
   /** ?silhouette=1 → flat white-on-black render used to measure silhouettes (IoU, framing). Implies bare. */
   silhouette: boolean;
+  /** ?theme=a (warm lamp night sky, default) | ?theme=b (aurora cool light). */
+  theme: StageTheme;
+  /** ?intro=0 skips the intro, ?intro=1 forces it (ignores the session flag). null = play once per session. */
+  intro: '0' | '1' | null;
+  /** ?introT=1.6 → freeze the intro at that many seconds (screenshots). null = real time. */
+  introT: number | null;
   /** ?debug=1 exposes window.__baymaxStage in production builds (always exposed in dev). */
   debug: boolean;
 }>;
@@ -63,12 +72,19 @@ export function parseStageParams(search: string): StageParams {
   const rawT = q.get('t');
   const t = rawT !== null && rawT.trim() !== '' && Number.isFinite(Number(rawT)) ? Math.min(1, Math.max(0, Number(rawT))) : null;
   const silhouette = truthy(q.get('silhouette'));
+  const rawIntroT = q.get('introT');
+  const introT = rawIntroT !== null && rawIntroT.trim() !== '' && Number.isFinite(Number(rawIntroT)) ? Math.max(0, Number(rawIntroT)) : null;
+  const intro = q.get('intro');
   return {
+    theme: q.get('theme') === 'b' ? 'b' : 'a',
+    intro: intro === '0' || intro === '1' ? intro : null,
+    introT,
     view: view === 'front' || view === 'side' || view === 'threeq' ? view : 'threeq',
     lod: q.get('lod') === 'low' ? 'low' : 'full',
     still: truthy(q.get('still')),
     t,
     bare: truthy(q.get('bare')) || silhouette,
+    shellLayout: truthy(q.get('shell')),
     fpsGuard: !(guard === '0' || guard === 'false'),
     silhouette,
     debug: truthy(q.get('debug')),
