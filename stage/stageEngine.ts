@@ -1,14 +1,15 @@
 import {
-  ACESFilmicToneMapping, AnimationClip, AnimationMixer, CanvasTexture, Color, DirectionalLight, DoubleSide, Group, HemisphereLight, Mesh, MeshBasicMaterial,
+  ACESFilmicToneMapping, NeutralToneMapping, AnimationClip, AnimationMixer, CanvasTexture, Color, DirectionalLight, DoubleSide, Group, HemisphereLight, Mesh, MeshBasicMaterial,
   PerspectiveCamera, PMREMGenerator, PointLight, Quaternion, RingGeometry, Scene, ShaderMaterial, SphereGeometry,
-  KeyframeTrack, SkinnedMesh, SRGBColorSpace, Vector3, WebGLRenderer, type Material, type MeshPhysicalMaterial, type Object3D,
+  KeyframeTrack, Matrix4, SkinnedMesh, SRGBColorSpace, Vector3, WebGLRenderer, type Material, type MeshPhysicalMaterial, type Object3D,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { CAMERA_FOV, CLIP_NAME, MODEL_HEIGHT, MODEL_URLS, TARGET, cameraDistance, cameraPosition, type StageLod, type StageParams } from './params';
+import { CAMERA_FOV, CLIP_NAME, MODEL_HEIGHT, MODEL_URLS, TARGET, VIEW_PRESETS, cameraDistance, cameraPosition, type StageLod, type StageParams } from './params';
 import { THEME_LOOK, layoutFor, type StageLayout, type ThemeLook } from './themes';
+import { lerp, startTurn, turnValue, type TurnState } from './facing';
 import { FINAL_VALUES, type IntroValues } from './intro';
 import { HIDDEN_MESH_PATTERN, classifyMaterial, type MaterialRole } from './materialRoles';
 import { createStageMaterial } from './materials';
@@ -32,11 +33,13 @@ export type StageStats = {
   bounds: { min: number[]; max: number[] } | null;
   eyeScreen: { l: number[]; r: number[] } | null;
   chip: number[] | null; theme: string; intro: { warm: number; push: number; plate: number };
+  /** f: 0 = idle (looking at the planet), 1 = facing the camera; yawDeg = model yaw relative to the camera (0 = facing it). */
+  facing: { front: boolean; f: number; yawDeg: number; headLiftDeg: number };
   planet: { screen: { x: number; y: number; r: number } | null; world?: { centre: number[]; ringNearestZ: number }; ringPoly?: number[][] };
 };
 
 /** Screen-space anchors (px, relative to the canvas): chest light (x, y), canvas size (w, h), feet centre and top of the head. */
-export type ChipFrame = { x: number; y: number; w: number; h: number; foot: { x: number; y: number }; top: { x: number; y: number } };
+export type ChipFrame = { x: number; y: number; w: number; h: number; foot: { x: number; y: number }; top: { x: number; y: number }; face: number };
 
 export type EngineHooks = {
   onPausedChange?: (paused: boolean) => void;
@@ -53,6 +56,12 @@ export class StageEngine {
   readonly camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.05, 50);
   readonly controls: OrbitControls;
   private readonly wrapper = new Group();
+  /** Yaw (turn towards the planet / the camera) sits above the lean + breath wrapper so the lean stays in the model's own frame. */
+  private readonly yawGroup = new Group();
+  private planetLight: DirectionalLight | null = null;
+  private turn: TurnState = { from: 0, to: 0, start: 0, dur: 0 };
+  private face = 0;
+  private layoutIdle: StageLayout = layoutFor('a', 1.6, true);
   private readonly look: ThemeLook;
   private hemi!: HemisphereLight; private rimLight!: DirectionalLight; private fillLight!: DirectionalLight; private warmLight!: PointLight; private planetGroup: Group | null = null;
   private planetMat: ShaderMaterial | null = null; private ringMat: ShaderMaterial | null = null;
@@ -92,7 +101,7 @@ export class StageEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.look = THEME_LOOK[params.theme];
-    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMapping = this.look.toneMapping === 'neutral' ? NeutralToneMapping : ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = this.look.exposure;
     this.renderer.setClearColor(0x000000, params.silhouette ? 1 : 0);
     host.appendChild(this.renderer.domElement);
@@ -100,7 +109,8 @@ export class StageEngine {
     this.renderer.domElement.setAttribute('data-stage-canvas', '');
     if (params.silhouette) host.style.background = '#000';
 
-    this.scene.add(this.wrapper);
+    this.yawGroup.add(this.wrapper);
+    this.scene.add(this.yawGroup);
     if (!params.silhouette) this.buildStageSet();
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -112,7 +122,10 @@ export class StageEngine {
     // On the page shell the wheel / touch drag must keep scrolling the page; zoom is only for the bare stage.
     this.controls.enableZoom = params.bare;
     if (!params.bare) this.renderer.domElement.style.touchAction = 'pan-y';
-    this.controls.addEventListener('start', () => { this.userMoved = true; });
+    // Only an actual drag counts as "the user moved the camera" (a plain click / tap must not freeze the layout framing, e.g. the scan turn).
+    const startPos = new Vector3();
+    this.controls.addEventListener('start', () => { startPos.copy(this.camera.position); });
+    this.controls.addEventListener('end', () => { if (this.camera.position.distanceTo(startPos) > 1e-3) this.userMoved = true; });
 
     this.stats = {
       ready: false, error: null, lod: params.lod, view: params.view, still: params.still, fixedClipFraction: this.fixedFraction, paused: this.paused, reduced: false,
@@ -122,7 +135,7 @@ export class StageEngine {
       guard: { enabled: params.fpsGuard && !params.silhouette, switched: false },
       canvas: { width: 0, height: 0, cameraDistance: 0, fov: CAMERA_FOV },
       model: { meshes: 0, skinnedMeshes: 0, bones: 0, clip: null, roles: {}, unmapped: [], hidden: [] }, bounds: null, eyeScreen: null,
-      chip: null, theme: params.theme, intro: { warm: 1, push: 1, plate: 1 }, planet: { screen: null },
+      chip: null, theme: params.theme, intro: { warm: 1, push: 1, plate: 1 }, planet: { screen: null }, facing: { front: false, f: 0, yawDeg: 0, headLiftDeg: 0 },
     };
     if (params.debug || import.meta.env?.DEV) { const w = window as unknown as { __baymaxStage?: StageStats; __baymaxEngine?: StageEngine }; w.__baymaxStage = this.stats; w.__baymaxEngine = this; }
 
@@ -145,11 +158,16 @@ export class StageEngine {
     this.hemi = new HemisphereLight(new Color(L.hemi.sky), new Color(L.hemi.ground), L.hemi.intensity);
     this.scene.add(this.hemi);
     this.rimLight = new DirectionalLight(new Color(L.rim.color), L.rim.intensity);
-    this.rimLight.position.set(2.2, 1.6, -2.4);
+    this.rimLight.position.set(...L.rim.pos);
     this.scene.add(this.rimLight);
     this.fillLight = new DirectionalLight(new Color(L.fill.color), L.fill.intensity);
-    this.fillLight.position.set(-2.0, 1.4, 3.0);
+    this.fillLight.position.set(...L.fill.pos);
     this.scene.add(this.fillLight);
+    if (L.planetLight.intensity > 0) {
+      this.planetLight = new DirectionalLight(new Color(L.planetLight.color), L.planetLight.intensity);
+      this.planetLight.position.set(...L.planetLight.pos);
+      this.scene.add(this.planetLight);
+    }
     this.warmLight = new PointLight(new Color(L.warm.color), L.warm.intensity, L.warm.distance, L.warm.decay);
     this.warmLight.position.copy(this.chipLocal);
     this.wrapper.add(this.warmLight); // follows the lean / breath of the body
@@ -236,12 +254,39 @@ export class StageEngine {
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = '100%'; this.renderer.domElement.style.height = '100%';
     this.camera.aspect = w / h;
-    this.layout = layoutFor(this.params.theme, w / h, this.params.bare && !this.params.shellLayout);
+    this.layoutIdle = layoutFor(this.params.theme, w / h, this.params.bare && !this.params.shellLayout);
+    this.applyFraming();
+    if (this.stats) { this.stats.canvas.width = w; this.stats.canvas.height = h; }
+  };
+
+  /** Framing between the idle layout and the scan (front) layout, by the current facing value. */
+  private applyFraming() {
+    const w = Math.max(1, this.host.clientWidth), h = Math.max(1, this.host.clientHeight);
+    const a = this.layoutIdle, b = a.front, f = this.face;
+    this.layout = b && f > 0 ? { ...a, fill: lerp(a.fill, b.fill, f), shiftX: lerp(a.shiftX, b.shiftX, f), shiftY: lerp(a.shiftY, b.shiftY, f), halfWidth: lerp(a.halfWidth ?? 0.62, b.halfWidth ?? a.halfWidth ?? 0.62, f) } : a;
     if (this.layout.shiftX || this.layout.shiftY) this.camera.setViewOffset(w, h, -this.layout.shiftX * w, -this.layout.shiftY * h, w, h); else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     if (!this.userMoved) { this.placeCamera(); this.controls.update(); }
-    if (this.stats) { this.stats.canvas.width = w; this.stats.canvas.height = h; }
-  };
+  }
+
+  /** Turn to face the camera (scan) or back towards the planet: 0.8 s / 1.2 s easeInOutCubic; reduced motion switches at once. */
+  setFacing(front: boolean) {
+    this.turn = startTurn(this.face, front, performance.now() / 1000, this.reduced);
+    this.stats.facing.front = front;
+    this.updateFacing(performance.now() / 1000);
+  }
+  get isFacingFront() { return this.turn.to === 1; }
+
+  private updateFacing(nowSec: number) {
+    const f = turnValue(this.turn, nowSec);
+    if (f !== this.face) { this.face = f; this.applyFraming(); }
+    const idleYaw = this.params.yaw ?? this.layoutIdle.yawDeg ?? 0;
+    const rel = idleYaw * (1 - f);
+    const az = VIEW_PRESETS[this.params.view].azimuthDeg;
+    this.yawGroup.rotation.y = ((az + rel) * Math.PI) / 180;
+    const lift = (this.layoutIdle.headLiftDeg ?? 0) * (1 - f);
+    this.stats.facing.f = +f.toFixed(4); this.stats.facing.yawDeg = +rel.toFixed(2); this.stats.facing.headLiftDeg = +lift.toFixed(2);
+  }
 
   /** Intro storyboard values (null = final look). Lights come up, camera pushes in 6 %, planet fades in. */
   setIntro(v: IntroValues | null) {
@@ -253,7 +298,7 @@ export class StageEngine {
   }
 
   /** Dev-only multipliers (window.__baymaxEngine.tune) used to tune the look from measurements. */
-  readonly tune = { warm: 1, fill: 1, rim: 1, env: 1, hemi: 1, planetX: 0, planetY: 0, planetZ: 0 };
+  readonly tune = { warm: 1, fill: 1, rim: 1, env: 1, hemi: 1, planet: 1, planetX: 0, planetY: 0, planetZ: 0 };
   private warmBreath = 1;
   private applyLook() {
     if (this.params.silhouette) return;
@@ -261,8 +306,11 @@ export class StageEngine {
     const lit = Math.max(v.rim, v.warm);
     this.wrapper.visible = lit > 0.001; // before the first light the model is not drawn at all (no dark silhouette in the 0.4–1.2 s spark phase)
     this.rimLight.intensity = L.rim.intensity * v.rim * this.tune.rim;
-    this.fillLight.intensity = L.fill.intensity * lit * this.tune.fill;
-    this.warmLight.intensity = L.warm.intensity * v.warm * this.warmBreath * this.tune.warm;
+    this.fillLight.intensity = L.fill.intensity * lit * this.tune.fill * (1 - 0.4 * this.face); // facing the camera the fill hits him square on: a touch less, so no blown highlights
+    // the chest light sits on his front: while he looks at the planet it only spills a warm edge past his right arm; facing the camera it is
+    // turned down to 15 % so the belly reads white, not cream (the CSS halo carries the warmth there)
+    this.warmLight.intensity = L.warm.intensity * v.warm * this.warmBreath * this.tune.warm * (1 - 0.85 * this.face);
+    if (this.planetLight) this.planetLight.intensity = L.planetLight.intensity * v.rim * this.tune.planet;
     this.hemi.intensity = L.hemi.intensity * lit * this.tune.hemi;
     this.scene.environmentIntensity = L.env * lit * this.tune.env; // three ≥ r163: material.envMapIntensity no longer scales scene.environment
     if (this.planetMat) this.planetMat.uniforms.uOpacity.value = v.plate;
@@ -275,7 +323,7 @@ export class StageEngine {
     this.wrapper.updateMatrixWorld(true);
     const at = (v: Vector3) => { this.tmpV.copy(v).applyMatrix4(this.wrapper.matrixWorld).project(this.camera); return { x: (this.tmpV.x * 0.5 + 0.5) * w, y: (-this.tmpV.y * 0.5 + 0.5) * h }; };
     const chip = at(this.chestLocal);
-    return { ...chip, w, h, foot: at(this.footLocal), top: at(this.topLocal) };
+    return { ...chip, w, h, foot: at(this.footLocal), top: at(this.topLocal), face: this.face };
   }
 
   private onVisibility = () => { this.guard.reset(performance.now()); this.lastNow = performance.now(); };
@@ -389,7 +437,10 @@ export class StageEngine {
     if (!recess) return;
     const v = new Vector3(), min = new Vector3(Infinity, Infinity, Infinity), max = new Vector3(-Infinity, -Infinity, -Infinity);
     const pos = recess.geometry.getAttribute('position');
-    for (let i = 0; i < pos.count; i++) { recess.getVertexPosition(i, v); v.applyMatrix4(recess.matrixWorld); min.min(v); max.max(v); }
+    // in the wrapper's own frame (the yaw group above it may already be turned towards the planet)
+    this.wrapper.updateMatrixWorld(true);
+    const toLocal = new Matrix4().copy(this.wrapper.matrixWorld).invert().multiply(recess.matrixWorld);
+    for (let i = 0; i < pos.count; i++) { recess.getVertexPosition(i, v); v.applyMatrix4(toLocal); min.min(v); max.max(v); }
     this.chipLocal.set((min.x + max.x) / 2, (min.y + max.y) / 2, max.z + this.look.warm.offsetZ);
     this.chestLocal.set(this.chipLocal.x, this.chipLocal.y, max.z);
     this.warmLight?.position.copy(this.chipLocal);
@@ -406,7 +457,7 @@ export class StageEngine {
     return { min: min.toArray().map(n => +n.toFixed(4)), max: max.toArray().map(n => +n.toFixed(4)) };
   }
 
-  private readonly qA = new Quaternion(); private readonly qB = new Quaternion(); private readonly qC = new Quaternion(); private readonly qD = new Quaternion(); private readonly zAxis = new Vector3(0, 0, 1);
+  private readonly qA = new Quaternion(); private readonly qB = new Quaternion(); private readonly qC = new Quaternion(); private readonly qD = new Quaternion(); private readonly zAxis = new Vector3(0, 0, 1); private readonly xAxis = new Vector3(1, 0, 0); private readonly qE = new Quaternion();
 
   /** Clip → wrapper (lean, breath) → head bone tilt. Order matters: the mixer rewrites bone values every frame, the tilt is re-applied on top. */
   private applyPose() {
@@ -425,6 +476,8 @@ export class StageEngine {
       this.wrapper.getWorldQuaternion(this.qB);                  // body (lean) rotation W
       // local' = P⁻¹ · W · Rz(tilt) · W⁻¹ · P · local   (roll about the model's own front axis)
       this.qC.setFromAxisAngle(this.zAxis, pose.headTiltRad);
+      const lift = ((this.layoutIdle.headLiftDeg ?? 0) * (1 - this.face) * Math.PI) / 180; // look up at the planet (−x tips the head back)
+      if (lift) this.qC.multiply(this.qE.setFromAxisAngle(this.xAxis, -lift));
       const world = this.qB.clone().multiply(this.qC).multiply(this.qB.clone().invert());
       const local = this.qA.clone().invert().multiply(world).multiply(this.qA);
       const before = this.qD.copy(head.quaternion);
@@ -446,6 +499,7 @@ export class StageEngine {
     if (clipShouldAdvance({ reduced: this.reduced, fixed: this.fixedFraction !== null, paused: this.paused })) this.animTime += dt;
     if (!this.paused && this.fixedFraction === null) this.decorTime += dt; // breath keeps running (at reduced amplitude) under reduced motion
     this.warmBreath = this.reduced || this.paused || this.fixedFraction !== null ? 1 : 1 + this.look.warm.breathAmp * Math.sin((2 * Math.PI * this.decorTime) / this.look.warm.breathPeriod);
+    this.updateFacing(now / 1000);
     this.applyLook();
     this.applyPose();
     this.renderOnce();

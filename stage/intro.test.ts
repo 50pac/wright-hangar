@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FINAL_VALUES, INTRO, introClock, introState, introValues, shouldPlayIntro } from './intro';
 import { parseStageParams } from './params';
 import { THEME_LOOK, layoutFor } from './themes';
+import { TURN, easeInOutCubic, startTurn, turnValue } from './facing';
 import { CAMERA_FOV, MODEL_HEIGHT, cameraDistance } from './params';
 import { makeStars } from './Stars';
 import { makeMotes } from './Motes';
@@ -93,30 +94,47 @@ describe('when the intro plays', () => {
 });
 
 describe('themes and layout numbers', () => {
-  it('phones (aspect < 0.9): figure fills >= 50 % of the viewport height', () => {
+  it('phones (aspect < 0.9): figure bottom left, ≈ 38 % of the height, text on top', () => {
     const l = layoutFor('a', 390 / 844, false);
-    expect(l.fill).toBeGreaterThanOrEqual(0.5); expect(l.halfWidth).toBeLessThan(0.62);
+    expect(l.fill).toBeGreaterThanOrEqual(0.35); expect(l.fill).toBeLessThanOrEqual(0.42); expect(l.halfWidth).toBeLessThan(0.62);
     const d = cameraDistance(390 / 844, CAMERA_FOV, l.fill, l.halfWidth);
     const frac = MODEL_HEIGHT / (2 * Math.tan(CAMERA_FOV * Math.PI / 360) * d);
-    expect(frac).toBeGreaterThanOrEqual(0.5); // height fraction actually realised at that distance
+    expect(frac).toBeGreaterThanOrEqual(0.35); // height fraction actually realised at that distance (not widened by the arm span)
+    expect(l.shiftX).toBeLessThan(0); expect(l.shiftY).toBeGreaterThan(0.1);
   });
 
-  it('theme A follows the visual-v3 recipe (warm chip light only on Baymax, cold rim, ACES 0.9)', () => {
+  it('theme A recipe: warm chip light on Baymax, warm planet light from the right back, cold rim from the left back, neutral tone mapping ≈ 1.1', () => {
     const a = THEME_LOOK.a;
     expect(a.warm.color).toBe('#ffe6c0'); expect(a.warm.distance).toBe(3.2); expect(a.warm.decay).toBe(2); expect(a.warm.breathPeriod).toBe(6); expect(a.warm.breathAmp).toBeLessThanOrEqual(0.12);
-    expect(a.rim.color).toBe('#7dc0e8'); expect(a.hemi.sky).toBe('#1b2a44'); expect(a.hemi.ground).toBe('#16233d'); expect(a.fill.intensity).toBeGreaterThan(0); expect(a.exposure).toBe(0.9); expect(a.planet).toBe(false); // planet is a painted background plate now
-    expect(a.warm.intensity).toBeGreaterThanOrEqual(0.5); expect(a.warm.intensity).toBeLessThanOrEqual(0.7); expect(a.rim.intensity).toBeGreaterThan(a.warm.intensity);
-    expect(THEME_LOOK.b.planet).toBe(false);
+    expect(a.rim.color).toBe('#7dc0e8'); expect(a.hemi.sky).toBe('#1b2a44'); expect(a.hemi.ground).toBe('#16233d'); expect(a.fill.intensity).toBeGreaterThan(0); expect(a.planet).toBe(false); // planet is a painted background plate now
+    expect(a.exposure).toBeGreaterThanOrEqual(1.05); expect(a.exposure).toBeLessThanOrEqual(1.15); expect(a.toneMapping).toBe('neutral');
+    expect(a.warm.intensity).toBeGreaterThanOrEqual(0.5); expect(a.warm.intensity).toBeLessThanOrEqual(0.7);
+    expect(a.planetLight.pos[0]).toBeGreaterThan(0); expect(a.planetLight.pos[2]).toBeLessThan(0); // right, behind
+    expect(a.rim.pos[0]).toBeLessThan(0); expect(a.rim.pos[2]).toBeLessThan(0);                 // left, behind
+    expect(THEME_LOOK.b.planet).toBe(false); expect(THEME_LOOK.b.exposure).toBe(0.9); expect(THEME_LOOK.b.toneMapping).toBe('aces');
   });
-  it('desktop A shifts the figure right (text column on the left), B keeps it centred and lower', () => {
-    expect(layoutFor('a', 1.6, false).shiftX).toBeGreaterThan(0.1);
+  it('desktop A: idle bottom left looking right at the planet; B keeps it centred and lower', () => {
     expect(layoutFor('b', 1.6, false).shiftX).toBe(0); expect(layoutFor('b', 1.6, false).shiftY).toBeGreaterThan(0);
     expect(layoutFor('a', 1.6, true)).toMatchObject({ fill: 0.6, shiftX: 0, shiftY: 0 });
+    for (const aspect of [1.6, 16 / 9]) {
+      const l = layoutFor('a', aspect, false);
+      expect(l.fill).toBeGreaterThanOrEqual(0.42); expect(l.fill).toBeLessThanOrEqual(0.5);
+      expect(0.5 + l.shiftX).toBeGreaterThanOrEqual(0.2); expect(0.5 + l.shiftX).toBeLessThanOrEqual(0.26);
+      expect(l.yawDeg).toBeGreaterThanOrEqual(120); expect(l.yawDeg).toBeLessThanOrEqual(150);
+      // scan mode: faces the camera, a bit towards the middle, ≈ .55 of the height
+      expect(l.front!.fill).toBeGreaterThanOrEqual(0.52); expect(l.front!.fill).toBeLessThanOrEqual(0.58);
+      expect(l.front!.shiftX).toBeGreaterThan(l.shiftX);
+    }
   });
-  it('desktop A: figure ~65 % tall, centred right of the middle', () => {
-    const l = layoutFor('a', 1.6, false);
-    expect(l.fill).toBeGreaterThanOrEqual(0.62); expect(l.fill).toBeLessThanOrEqual(0.68);
-    expect(0.5 + l.shiftX).toBeGreaterThanOrEqual(0.64); expect(0.5 + l.shiftX).toBeLessThanOrEqual(0.68);
+  it('turn: 0.8 s to the camera / 1.2 s back, easeInOutCubic, instant under reduced motion', () => {
+    expect(easeInOutCubic(0)).toBe(0); expect(easeInOutCubic(1)).toBe(1); expect(easeInOutCubic(0.5)).toBeCloseTo(0.5);
+    expect(easeInOutCubic(0.25)).toBeCloseTo(0.0625); expect(easeInOutCubic(0.75)).toBeCloseTo(0.9375);
+    const s = startTurn(0, true, 10, false);
+    expect(s.dur).toBeCloseTo(TURN.toFrontSec); expect(turnValue(s, 10)).toBe(0); expect(turnValue(s, 10.4)).toBeCloseTo(0.5); expect(turnValue(s, 10.8)).toBe(1); expect(turnValue(s, 99)).toBe(1);
+    const back = startTurn(1, false, 20, false);
+    expect(back.dur).toBeCloseTo(TURN.toBackSec); expect(turnValue(back, 20.6)).toBeCloseTo(0.5); expect(turnValue(back, 21.2)).toBe(0);
+    const mid = startTurn(0.5, false, 0, false); expect(mid.dur).toBeCloseTo(0.6); // reversing half way takes the remaining share
+    const r = startTurn(0, true, 5, true); expect(r.dur).toBe(0); expect(turnValue(r, 5)).toBe(1);
   });
   it('star field: 50 fine stars (30 on the low tier), deterministic, five near-white colours; dust motes stay under 20', () => {
     expect(makeStars(50)).toHaveLength(50); expect(makeStars(50)).toEqual(makeStars(50));

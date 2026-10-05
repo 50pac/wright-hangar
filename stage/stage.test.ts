@@ -63,15 +63,16 @@ it('keeps eyes matte black and the body matte white', () => {
   expect(eye.sheen).toBe(0);
   expect(eye.clearcoat).toBe(0);
   const body = createStageMaterial('body', 'Baymax_Soft_White_Vinyl');
-  expect(body.color.getHexString()).toBe('f6f3eb');
-  expect(body.roughness).toBeGreaterThanOrEqual(0.6);
+  expect(body.color.getHexString()).toBe('f4f4f2');
+  expect(body.roughness).toBeGreaterThanOrEqual(0.5);
   expect(body.roughness).toBeLessThanOrEqual(0.7);
   expect(body.sheen).toBeLessThanOrEqual(0.4);
   expect(body.transmission).toBe(0);
 });
 
 it('parses stage URL params', () => {
-  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, t: null, bare: false, shellLayout: false, fpsGuard: true, silhouette: false, theme: 'a', intro: null, introT: null, debug: false });
+  expect(parseStageParams('')).toEqual({ view: 'threeq', lod: 'full', still: false, t: null, bare: false, shellLayout: false, fpsGuard: true, silhouette: false, theme: 'a', intro: null, introT: null, debug: false, yaw: null });
+  expect(parseStageParams('?yaw=90').yaw).toBe(90); expect(parseStageParams('?yaw=abc').yaw).toBeNull();
   expect(parseStageParams('?view=side&lod=low&still=1&fpsguard=0')).toMatchObject({ view: 'side', lod: 'low', still: true, fpsGuard: false });
   expect(parseStageParams('?view=bogus&lod=bogus').view).toBe('threeq');
   expect(parseStageParams('?t=0.5').t).toBe(0.5);

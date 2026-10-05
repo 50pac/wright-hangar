@@ -24,6 +24,10 @@ const paused = page => page.evaluate(() => window.__baymaxStage?.paused);
 const waitAttr = (page, want, timeout) => page.waitForFunction(w => document.querySelector('.care-page')?.dataset.intro === w, want, { timeout });
 const uiOpacity = page => page.evaluate(() => +getComputedStyle(document.querySelector('.vz-hero')).opacity);
 
+// Warm-up: one throw-away page load so the first timed case does not pay the browser's one-off costs (shader compile, font + plate decode under
+// software GL). The timed assertions below are unchanged.
+{ const { ctx, page } = await openPage(`theme=a&intro=0`); await page.waitForFunction(() => window.__baymaxStage?.ready === true, null, { timeout: 60000 }).catch(() => {}); await page.waitForTimeout(500); await ctx.close(); }
+
 // ───────── Acceptance 1: Esc / Space / mouse click skip the intro immediately; after the intro Space pauses again
 for (const how of ['Escape', 'Space', 'click']) {
   // The model is held back 6 s so the storyboard parks at the breathing spark: a deterministic window to press the key in.
@@ -83,6 +87,53 @@ for (const how of ['Escape', 'Space', 'click']) {
   while (Date.now() - t0 < 20000) { const a = await attr(page); seen.add(a); if (a === 'done') break; await page.waitForTimeout(40); }
   check('[2:lod=low] the intro plays (storyboard visible) and finishes by itself, not stuck on loading', seen.has('play') && (await attr(page)) === 'done', `${[...seen].join('>')} after ${since()} ms`);
   check('[2:lod=low] ends with reason "finished" (not skipped / failed / timeout) and the low model is shown', (await reason(page)) === 'finished' && (await page.evaluate(() => window.__baymaxStage.lod)) === 'low' && (await ready(page)), await reason(page));
+  await ctx.close();
+}
+
+// ───────── Acceptance 4: "1" / the scan button → he turns to face the camera (0.8 s); Esc / a second click → turns back to the planet (1.2 s); reduced motion = instant
+const facing = page => page.evaluate(() => ({ ...window.__baymaxStage.facing }));
+// Records, from the keydown / click timestamp, the first frame where |yaw| ≤ 10° (yaw = model yaw relative to the camera, 0 = facing it).
+const watchFront = page => page.evaluate(() => { window.__turnWatch = { t0: null, hit: null, samples: [] };
+  const w = window.__turnWatch; const arm = () => { if (w.t0 !== null) return; w.t0 = performance.now();
+    const tick = () => { const y = window.__baymaxStage.facing.yawDeg, dt = performance.now() - w.t0; w.samples.push([+dt.toFixed(0), y]);
+      if (Math.abs(y) <= 10 && w.hit === null) w.hit = { ms: dt, yaw: y }; if (dt < 2500) requestAnimationFrame(tick); }; requestAnimationFrame(tick); };
+  window.addEventListener('keydown', arm, { capture: true, once: true }); window.addEventListener('pointerdown', arm, { capture: true, once: true }); });
+{
+  const { ctx, page } = await openPage(`theme=a&intro=0`);
+  await page.waitForFunction(() => window.__baymaxStage?.ready === true, null, { timeout: 60000 }); await page.waitForTimeout(400);
+  const idle = await facing(page);
+  check('[4:turn] idle: back three-quarter view, looking right at the planet (yaw 120–150°)', idle.yawDeg >= 120 && idle.yawDeg <= 150 && idle.f === 0, JSON.stringify(idle));
+  await watchFront(page); await page.keyboard.press('1');
+  await page.waitForFunction(() => window.__turnWatch?.hit !== null || performance.now() - (window.__turnWatch?.t0 ?? performance.now()) > 2400, null, { timeout: 5000 });
+  const w = await page.evaluate(() => window.__turnWatch);
+  check('[4:turn] after "1" he faces the camera within 1 s (|yaw| ≤ 10°)', w.hit && w.hit.ms <= 1000, w.hit ? `${w.hit.ms.toFixed(0)} ms, yaw ${w.hit.yaw}°` : `never: ${JSON.stringify(w.samples.slice(-3))}`);
+  const mid = w.samples.filter(([t, y]) => t > 50 && t < 750 && y > 1 && y < 129);
+  check('[4:turn] it is an animated turn (intermediate angles seen), not a jump', mid.length >= 2, `${mid.length} intermediate frames`);
+  await page.waitForTimeout(400);
+  const f1 = await facing(page);
+  check('[4:turn] settles exactly front (yaw 0°, f = 1)', Math.abs(f1.yawDeg) < 0.01 && f1.f === 1 && f1.front === true, JSON.stringify(f1));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
+  const half = await facing(page);
+  await page.waitForTimeout(1000);
+  const back = await facing(page);
+  check('[4:turn] Esc turns him slowly back to the planet (still turning at 0.6 s, done by 1.6 s)', half.yawDeg > 10 && half.yawDeg < 125 && back.yawDeg === idle.yawDeg && back.f === 0, `0.6 s: ${half.yawDeg}°, 1.6 s: ${back.yawDeg}°`);
+  await page.click('[data-stage-scan]'); await page.waitForTimeout(1200);
+  const c1 = await facing(page);
+  await page.click('[data-stage-scan]'); await page.waitForTimeout(1700);
+  const c2 = await facing(page);
+  check('[4:turn] the scan button turns him to the camera, a second click turns him back', Math.abs(c1.yawDeg) < 0.01 && c2.yawDeg === idle.yawDeg, `${c1.yawDeg}° → ${c2.yawDeg}°`);
+  await ctx.close();
+}
+{
+  const { ctx, page } = await openPage(`theme=a&intro=0`, { reducedMotion: 'reduce' });
+  await page.waitForFunction(() => window.__baymaxStage?.ready === true, null, { timeout: 60000 }); await page.waitForTimeout(600);
+  await watchFront(page); await page.keyboard.press('1'); await page.waitForTimeout(500);
+  const w = await page.evaluate(() => window.__turnWatch);
+  const firstAfter = w.samples[0];
+  check('[4:reduced] reduced motion: "1" switches to front at once (first frame already |yaw| ≤ 10°, no turn)', firstAfter && Math.abs(firstAfter[1]) <= 10 && w.samples.every(([, y]) => Math.abs(y) <= 10), `first frame ${JSON.stringify(firstAfter)}, frames ${w.samples.length}`);
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  const b = await facing(page);
+  check('[4:reduced] Esc switches straight back', b.yawDeg >= 120 && b.f === 0, JSON.stringify(b));
   await ctx.close();
 }
 

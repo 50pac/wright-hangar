@@ -25,6 +25,8 @@ export type StageParams = Readonly<{
   introT: number | null;
   /** ?debug=1 exposes window.__baymaxStage in production builds (always exposed in dev). */
   debug: boolean;
+  /** ?yaw=<deg> → dev/screenshot override of the idle yaw relative to the camera (e.g. 90 = side view facing right). */
+  yaw: number | null;
 }>;
 
 export const MODEL_URLS: Record<StageLod, string> = {
@@ -75,6 +77,7 @@ export function parseStageParams(search: string): StageParams {
   const rawIntroT = q.get('introT');
   const introT = rawIntroT !== null && rawIntroT.trim() !== '' && Number.isFinite(Number(rawIntroT)) ? Math.max(0, Number(rawIntroT)) : null;
   const intro = q.get('intro');
+  const rawYaw = q.get('yaw');
   return {
     theme: q.get('theme') === 'b' ? 'b' : 'a',
     intro: intro === '0' || intro === '1' ? intro : null,
@@ -88,6 +91,7 @@ export function parseStageParams(search: string): StageParams {
     fpsGuard: !(guard === '0' || guard === 'false'),
     silhouette,
     debug: truthy(q.get('debug')),
+    yaw: rawYaw !== null && rawYaw.trim() !== '' && Number.isFinite(Number(rawYaw)) ? Math.min(180, Math.max(-180, Number(rawYaw))) : null,
   };
 }
 

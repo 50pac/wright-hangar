@@ -26,8 +26,8 @@
   --f-hand: 'Ma Shan Zheng', 'Comic Sans MS', cursive;
   --chip-x: 66%; --chip-y: 52%;
   /* Figure anchors (px), written every frame by the page from the 3D projection; these are the pre-load defaults. */
-  --foot-x: 66vw; --foot-y: 86vh; --body-cx: 66vw; --body-cy: 54vh; --body-h: 65vh;
-  --plate-pos: 70% 50%; --plate-inset: -1.5%;
+  --foot-x: 23vw; --foot-y: 94vh; --body-cx: 23vw; --body-cy: 71vh; --body-h: 46vh;
+  --plate-pos: 100% 50%; --plate-inset: -1.5%; --face: 0;
   position: fixed; inset: 0; overflow: hidden; background: var(--sky-0); color: var(--ink);
   font-family: var(--f-sans); font-weight: 500; -webkit-font-smoothing: antialiased; isolation: isolate;
 }
@@ -46,10 +46,15 @@
 .vz-plate i {
   position: absolute; inset: var(--plate-inset); background: url('./assets/space_plate_v1.jpg') var(--plate-pos) / cover no-repeat; animation: vz-plate-drift 120s ease-in-out infinite alternate;
 }
-/* Left side pressed to the sky colour so the text column stays clean. */
+/* Left side pressed to the sky colour so the text column (top left) and the figure (bottom left) sit on clean dark sky; the planet stays whole on the right. */
 .vz-plate::after {
   content: ''; position: absolute; inset: 0;
-  background: linear-gradient(90deg, #06070d 0%, #06070d 30%, rgba(6, 7, 13, .78) 40%, rgba(6, 7, 13, .3) 48%, rgba(6, 7, 13, 0) 58%);
+  background: linear-gradient(90deg, #06070d 0%, rgba(6, 7, 13, .96) 26%, rgba(6, 7, 13, .7) 36%, rgba(6, 7, 13, .22) 44%, rgba(6, 7, 13, 0) 50%);
+}
+/* A second, finer grain only on the (upscaled) plate, so its softness reads as film grain. */
+.vz-plate::before {
+  content: ''; position: absolute; inset: 0; z-index: 1; opacity: .04; mix-blend-mode: overlay; background-size: 180px 180px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 @keyframes vz-plate-drift { from { transform: translate3d(-.5%, .3%, 0) scale(1); } to { transform: translate3d(.5%, -.3%, 0) scale(1.012); } }
 .vz-stars { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; mix-blend-mode: screen; opacity: var(--i-stars, .9); pointer-events: none; }
@@ -63,7 +68,7 @@
 .vz-shadow { width: calc(var(--body-h) * .56); height: calc(var(--body-h) * .095); background: radial-gradient(closest-side, rgba(2, 3, 8, .62) 0%, rgba(2, 3, 8, .34) 50%, rgba(2, 3, 8, 0) 100%); filter: blur(5px); }
 
 /* HUD: one very faint dashed orbit and four corner ticks around the figure; drawn with a stroke reveal during the intro. Sits behind the figure. */
-.vz-hud { position: absolute; z-index: 1; left: var(--body-cx); top: var(--body-cy); width: calc(var(--body-h) * 1.5); height: calc(var(--body-h) * 1.5); transform: translate(-50%, -50%); overflow: visible; pointer-events: none; }
+.vz-hud { position: absolute; z-index: 1; left: var(--body-cx); top: var(--body-cy); width: calc(var(--body-h) * 1.0); height: calc(var(--body-h) * 1.1); transform: translate(-50%, -50%); overflow: visible; pointer-events: none; }
 .vz-hud-orbit { fill: none; stroke: rgba(244, 200, 142, .18); stroke-width: 1; stroke-dasharray: 2 4; vector-effect: non-scaling-stroke; }
 .vz-hud-reveal { fill: none; stroke: #fff; stroke-width: 10; stroke-dasharray: 1; stroke-dashoffset: calc(1 - var(--i-hud, 1)); }
 .vz-hud-tick { fill: none; stroke: rgba(244, 200, 142, .18); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: var(--i-hud, 1); }
@@ -71,7 +76,7 @@
 .vz-halo {
   position: absolute; z-index: 3; left: var(--chip-x); top: var(--chip-y); width: 56vmin; aspect-ratio: 1; transform: translate(-50%, -50%); pointer-events: none; mix-blend-mode: screen;
   background: radial-gradient(closest-side, rgba(244, 200, 142, .2) 0%, rgba(244, 200, 142, .14) 24%, rgba(244, 200, 142, .07) 52%, rgba(244, 200, 142, .02) 80%, rgba(244, 200, 142, 0) 100%);
-  opacity: var(--i-warm, 1);
+  opacity: calc(var(--i-warm, 1) * (.45 + .55 * var(--face, 0))); /* his chest faces away while he looks at the planet */
 }
 .vz-motes { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; mix-blend-mode: screen; opacity: var(--i-warm, 1); pointer-events: none; }
 .vz-spark {
@@ -123,22 +128,23 @@
 .vz-nav a.vz-nav-cta:hover { background: #fff; }
 
 /* ---------- hero (A: text on the left 45 %, figure on the right) ---------- */
-.vz-hero { position: absolute; z-index: 10; left: var(--edge); top: 0; bottom: 0; width: 45%; display: flex; flex-direction: column; justify-content: center; padding-top: 3vh; pointer-events: none; }
+.vz-hero { position: absolute; z-index: 10; left: var(--edge); top: 11vh; width: 45%; display: flex; flex-direction: column; justify-content: flex-start; pointer-events: none; }
 .vz-hero > * { pointer-events: none; }
 .vz-hero button, .vz-hero a { pointer-events: auto; }
-.vz-label { width: fit-content; margin: 0 0 clamp(16px, 2.6vh, 26px); display: flex; align-items: center; gap: 12px; font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-3); }
+.vz-label { width: fit-content; margin: 0 0 clamp(12px, 1.9vh, 22px); display: flex; align-items: center; gap: 12px; font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-3); }
 .vz-rule { display: block; width: 28px; height: 1px; background: linear-gradient(90deg, rgba(245, 239, 229, .1), rgba(245, 239, 229, .6)); }
 .vz-title {
-  margin: 0; font-family: var(--f-serif); font-weight: 500; font-size: clamp(3rem, 6.2vw, 5.4rem); line-height: 1.1; letter-spacing: -.01em; color: #f5efe5;
+  margin: 0; font-family: var(--f-serif); font-weight: 500; font-size: clamp(2.6rem, 4.2vw, 4.6rem); line-height: 1.1; letter-spacing: -.01em; color: #f5efe5;
   text-shadow: 0 .1rem .9rem rgb(0 0 0 / 30%);
 }
 .vz-title:lang(en), :lang(en) > .vz-title { line-height: .98; letter-spacing: -.03em; }
 .vz-line[data-l="1"] { font-size: .78em; color: rgba(245, 239, 229, .68); margin-bottom: .04em; }
-.vz-sub { width: fit-content; margin: clamp(16px, 2.6vh, 26px) 0 0; font-size: clamp(1.05rem, 1.55vw, 1.35rem); line-height: 1.5; letter-spacing: .02em; color: var(--ink-2); }
+.vz-sub { width: fit-content; margin: clamp(12px, 1.9vh, 22px) 0 0; font-size: clamp(1.05rem, 1.55vw, 1.35rem); line-height: 1.5; letter-spacing: .02em; color: var(--ink-2); }
 .vz-sub2 { width: fit-content; margin: 8px 0 0; font-size: clamp(.8rem, .95vw, .9rem); line-height: 1.6; letter-spacing: .02em; color: #f5efe58c; }
-.vz-cta { margin-top: clamp(28px, 5.4vh, 52px); display: flex; flex-direction: column; align-items: flex-start; }
+.vz-cta { margin-top: clamp(18px, 3vh, 34px); display: flex; flex-direction: row; align-items: center; gap: 22px; }
+.vz-cta-side { display: flex; flex-direction: column; gap: 9px; }
 .vz-btn {
-  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 14px; min-height: 3.4rem; padding: 0 1.55rem 0 1.4rem; border: 1px solid rgb(255 255 255 / 22%); border-radius: 999px;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 14px; min-height: 3.15rem; padding: 0 1.5rem 0 1.35rem; flex: none; border: 1px solid rgb(255 255 255 / 22%); border-radius: 999px;
   background: var(--btn-bg); color: var(--btn-ink); font: inherit; font-size: 1.0625rem; font-weight: 600; letter-spacing: .02em; cursor: pointer;
   box-shadow: 0 .7rem 1.8rem #00000047, inset 0 1px #fff; transition: box-shadow .24s var(--ease);
 }
@@ -154,10 +160,12 @@
 @keyframes vz-breathe { 0%, 100% { transform: scale(.82); opacity: .78; } 50% { transform: scale(1.1); opacity: 1; } }
 .vz-arrow { flex: none; transition: transform .24s var(--ease); }
 .vz-btn:hover .vz-arrow { transform: translateX(3px); }
-.vz-meta { margin: 16px 0 0; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .12em; color: var(--ink-3); }
-.vz-status { margin: clamp(18px, 3.4vh, 34px) 0 0; display: flex; align-items: center; gap: 9px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; color: rgba(245, 239, 229, .55); }
+.vz-meta { margin: 0; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: .12em; color: var(--ink-3); }
+.vz-status { margin: 0; display: flex; align-items: center; gap: 9px; white-space: nowrap; font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; color: rgba(245, 239, 229, .55); }
 .vz-status i { width: 5px; height: 5px; border-radius: 50%; background: var(--care-red); }
-@media (max-height: 660px) { .vz-status { display: none; } }
+@media (max-height: 560px) { .vz-status { display: none; } }
+.vz-status .vz-hints { margin-left: 8px; }
+.vz-status-note { margin-left: 8px; color: var(--ink-2); }
 
 /* Handwritten easter egg beside the feet, with a hand-drawn arrow pointing back at the figure. */
 .vz-egg {
@@ -167,16 +175,22 @@
 .vz-egg::before { content: ''; position: absolute; z-index: -1; inset: -34% -16% -30% -26%; border-radius: 50%; pointer-events: none; background: radial-gradient(closest-side, rgba(6, 7, 13, .6), rgba(6, 7, 13, .32) 60%, rgba(6, 7, 13, 0) 100%); }
 .vz-egg-arrow { flex: none; width: 56px; height: 35px; margin: -6px 0 0 -12px; color: rgba(245, 239, 229, .5); }
 .vz-egg > span { display: block; max-width: 8.2em; }
+.vz-egg > * { opacity: calc(1 - var(--face, 0)); } /* steps aside while he faces the camera (scan) */
 
 /* Bottom right: key hint (left of the voice button) + voice button; disclaimer on its own line at the very bottom. */
 .vz-dock { position: absolute; z-index: 10; right: var(--edge); bottom: clamp(30px, 5.2vh, 52px); display: flex; align-items: center; gap: 14px; pointer-events: none; }
 .vz-hints {
-  display: flex; align-items: center; gap: 14px; white-space: nowrap; opacity: var(--hint-k, 1); transition: opacity .3s linear;
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; opacity: var(--hint-k, 1); transition: opacity .3s linear;
   font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; color: rgba(245, 239, 229, .72); pointer-events: none;
 }
 .vz-hints[data-faded="1"] { --hint-k: 0; transition-duration: .8s; }
-.vz-hints > span { display: inline-flex; align-items: center; gap: 8px; }
 .vz-hints kbd { display: inline-flex; padding: 1px 7px; border: 1px solid rgb(255 255 255 / 26%); border-bottom-width: 2px; border-radius: 6px; background: #ffffff0d; color: var(--ink); font: inherit; letter-spacing: .08em; }
+.vz-nav-mic {
+  position: relative; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; margin: 0 2px 0 6px; padding: 0; border-radius: 50%; cursor: pointer; color: #f5f2ebe0;
+  border: 1px solid rgb(255 255 255 / 22%); background: #ffffff0d; box-shadow: inset 0 1px #ffffff30; transition: background-color .16s var(--ease), color .16s var(--ease);
+}
+.vz-nav-mic:hover { background: #ffffff1f; }
+.vz-nav-mic[aria-checked="true"] { color: #181613; background: var(--warm); border-color: transparent; }
 .vz-mic {
   position: relative; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: 50%; cursor: pointer; pointer-events: auto; color: #f5f2ebe0;
   border: 1px solid rgb(255 255 255 / 30%); background: #ffffff0d; -webkit-backdrop-filter: blur(.8rem) saturate(150%); backdrop-filter: blur(.8rem) saturate(150%);
@@ -186,9 +200,9 @@
 .vz-mic[aria-checked="true"] { color: #181613; background: var(--warm); border-color: transparent; }
 .vz-note { position: absolute; z-index: 10; left: 0; right: 0; bottom: clamp(8px, 1.8vh, 16px); margin: 0; padding: 0 var(--edge); text-align: center; white-space: nowrap; font-size: 11px; line-height: 1.4; color: var(--ink); opacity: calc(.45 * var(--i-ui, 1)); pointer-events: none; }
 
-.vz-soft { position: absolute; z-index: 11; left: 66%; top: 74%; transform: translateX(-50%); margin: 0; padding: 8px 16px; border-radius: 999px; border: 1px solid rgb(255 255 255 / 18%); background: rgba(18, 23, 34, .72); font-size: .9rem; color: var(--ink); text-align: center; max-width: 80vw; }
+.vz-soft { position: absolute; z-index: 11; left: 44%; top: 80%; transform: translateX(-50%); margin: 0; padding: 8px 16px; border-radius: 999px; border: 1px solid rgb(255 255 255 / 18%); background: rgba(18, 23, 34, .72); font-size: .9rem; color: var(--ink); text-align: center; max-width: 80vw; }
 .vz-fps { top: 88px; left: 50%; }
-.vz-placeholder { position: absolute; z-index: 3; left: 66%; top: 50%; height: min(52vh, 420px); transform: translate(-50%, -50%); filter: drop-shadow(0 0 40px rgba(244, 200, 142, .25)); pointer-events: none; }
+.vz-placeholder { position: absolute; z-index: 3; left: 23%; top: 71%; height: min(40vh, 400px); transform: translate(-50%, -50%); filter: drop-shadow(0 0 40px rgba(244, 200, 142, .25)); pointer-events: none; }
 
 .vz-progress { position: absolute; z-index: 11; left: 0; bottom: 0; height: 1px; width: 100%; background: linear-gradient(90deg, transparent, var(--warm), transparent); background-size: 30% 100%; background-repeat: no-repeat; opacity: .8; animation: vz-slide 1.6s linear infinite; }
 .care-page[data-intro-waiting="0"] .vz-progress { display: none; }
@@ -238,35 +252,39 @@
 
 /* ---------- narrow screens (phones): title on top, figure in the middle, button at the bottom ---------- */
 @media (max-width: 820px) {
-  .care-page { --foot-x: 50vw; --foot-y: 82vh; --body-cx: 50vw; --body-cy: 56vh; --body-h: 52vh; --plate-pos: 66% 0%; --plate-inset: -1.5%; }
-  .vz-plate::after { background: linear-gradient(180deg, rgba(6, 7, 13, .92) 0%, rgba(6, 7, 13, .78) 24%, rgba(6, 7, 13, .35) 40%, rgba(6, 7, 13, 0) 52%), linear-gradient(0deg, rgba(6, 7, 13, .9) 0%, rgba(6, 7, 13, .6) 14%, rgba(6, 7, 13, 0) 30%), linear-gradient(90deg, rgba(6, 7, 13, .5) 0%, rgba(6, 7, 13, 0) 45%); }
+  .care-page { --foot-x: 30vw; --foot-y: 90vh; --body-cx: 30vw; --body-cy: 71vh; --body-h: 38vh; --plate-pos: 74% 0%; --plate-inset: -1.5%; }
+  /* Portrait: the plate is drawn smaller than cover (the planet is wider than the phone), planet centre ≈ (.76 W, .55 H), edges faded into the sky. */
+  .vz-plate i { inset: auto; left: -54vw; top: 33vh; height: 47vh; width: calc(47vh * 16 / 9); background-size: cover; background-position: 0 0;
+    -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 14%, #000 72%, transparent 100%); mask-image: linear-gradient(180deg, transparent 0%, #000 14%, #000 72%, transparent 100%); }
+  .vz-plate::after { background: linear-gradient(90deg, rgba(6, 7, 13, .5) 0%, rgba(6, 7, 13, 0) 40%); }
   .vz-top { top: 14px; }
   .vz-brand { gap: 8px; }
   .vz-brand-name { font-size: 1.05rem; letter-spacing: .06em; }
   .vz-brand-mono { display: none; }
   .vz-nav { padding: .2rem; }
-  .vz-nav a { min-height: 1.85rem; padding: .4rem .55rem; font-size: .8125rem; }
-  .vz-nav a.vz-nav-cta { margin-left: 3px; padding-inline: .8rem; }
-  .vz-hero { width: auto; right: var(--edge); top: 12%; bottom: 0; justify-content: flex-start; padding-top: 0; }
-  .vz-label { margin-bottom: 12px; font-size: 10.5px; }
-  .vz-title { font-size: clamp(2.6rem, 14vw, 3.4rem); }
+  .vz-nav a { min-height: 1.85rem; padding: .4rem .5rem; font-size: .8125rem; }
+  .vz-nav a.vz-nav-cta { margin-left: 3px; padding-inline: .75rem; }
+  .vz-nav-mic { width: 1.85rem; height: 1.85rem; margin: 0 0 0 3px; }
+  .vz-hero { width: auto; right: var(--edge); top: 10.5vh; }
+  .vz-label { margin-bottom: 10px; font-size: 10.5px; }
+  .vz-title { font-size: clamp(2.3rem, 11.5vw, 3rem); }
   .vz-sub { margin-top: 8px; font-size: 1rem; }
   .vz-sub2 { display: none; }
-  .vz-cta { position: absolute; left: 0; right: 0; bottom: calc(3.4vh + 22px); margin: 0; align-items: center; }
+  .vz-cta { margin-top: 18px; gap: 14px; }
+  .vz-btn { min-height: 2.9rem; padding: 0 1.15rem 0 1.05rem; font-size: 1rem; gap: 10px; }
   .vz-status { display: none; }
-  .vz-meta { margin-top: 12px; font-size: 10.5px; }
-  .vz-egg, .vz-hud { display: none; }
-  .vz-skip { bottom: 150px; }
+  .vz-meta { font-size: 10.5px; letter-spacing: .06em; white-space: nowrap; }
+  .vz-hud-tick { display: none; }
+  .vz-egg { display: none; }
+  .vz-skip { bottom: 64px; }
   .vz-dock { right: 14px; bottom: calc(3.4vh + 22px); }
-  .vz-hints { display: none; }
-  .vz-mic { width: 40px; height: 40px; }
   .vz-note { white-space: normal; font-size: 10px; line-height: 1.35; padding: 0 20px; bottom: 8px; }
   .vz-cards { grid-template-columns: repeat(4, 1fr); top: auto; bottom: 44px; column-gap: 6px; }
   .vz-cards .vz-card:nth-child(n) { grid-column: auto; grid-row: auto; justify-self: stretch; margin: 0; width: auto; padding: 8px 6px; align-items: center; }
   .vz-card-t { display: none; }
   .vz-card-k { letter-spacing: .06em; font-size: 10.5px; }
-  .vz-soft { left: 50%; }
-  .vz-placeholder { left: 50%; top: 60%; }
+  .vz-soft { left: 50%; top: 52%; }
+  .vz-placeholder { left: 30%; top: 72%; height: 32vh; }
 }
 
 /* Bare stage (?bare=1): just the stage + key hints. */
@@ -287,5 +305,5 @@
 .care-page[data-intro="reduced-fade"] .vz-note { opacity: .45; }
 @media (forced-colors: active) {
   .vz-halo, .vz-spark, .vz-grain, .vz-vignette, .vz-aurora, .vz-nav::before, .vz-nav::after, .vz-plate, .vz-ground, .vz-hud, .vz-motes { display: none; }
-  .vz-nav, .vz-card, .vz-mic { backdrop-filter: none; -webkit-backdrop-filter: none; border-color: CanvasText; }
+  .vz-nav, .vz-card, .vz-mic, .vz-nav-mic { backdrop-filter: none; -webkit-backdrop-filter: none; border-color: CanvasText; }
 }

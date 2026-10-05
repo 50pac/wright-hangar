@@ -64,8 +64,9 @@ export default function StagePage() {
   const [lod, setLod] = useState<StageLod>(params.lod);
   const [fpsNotice, setFpsNotice] = useState(false);
   const [hintsFaded, setHintsFaded] = useState(false);
+  const [front, setFront] = useState(false); // scan mode: he has turned to face the camera
   const [voice, setVoice] = useState(false); // placeholder switch, no behaviour yet
-  const ctl = useRef({ start: 0, readyAt: null as number | null, failedAt: null as number | null, skipAt: null as number | null, chip: { x: 0, y: 0, w: 0, h: 0 }, body: { cx: 0, cy: 0, h: 0, fx: 0, fy: 0 }, lastSkip: false });
+  const ctl = useRef({ start: 0, readyAt: null as number | null, failedAt: null as number | null, skipAt: null as number | null, chip: { x: 0, y: 0, w: 0, h: 0 }, body: { cx: 0, cy: 0, h: 0, fx: 0, fy: 0 }, lastSkip: false, face: 0 });
 
   const elapsed = useCallback(() => params.introT ?? (performance.now() - ctl.current.start) / 1000, [params]);
   const debugOn = params.debug || !!import.meta.env?.DEV;
@@ -100,6 +101,7 @@ export default function StagePage() {
             root.style.setProperty('--body-cx', px(cx)); root.style.setProperty('--body-cy', px(cy)); root.style.setProperty('--body-h', px(bh));
             root.style.setProperty('--foot-x', px(chip.foot.x)); root.style.setProperty('--foot-y', px(chip.foot.y));
           }
+          if (Math.abs(c.face - chip.face) > 0.002 || (chip.face !== c.face && (chip.face === 0 || chip.face === 1))) { c.face = chip.face; root.style.setProperty('--face', chip.face.toFixed(3)); }
           const p = c.chip; if (Math.abs(p.x - chip.x) + Math.abs(p.y - chip.y) + Math.abs(p.w - chip.w) < 0.4) return;
           c.chip = chip; root.style.setProperty('--chip-x', px(chip.x)); root.style.setProperty('--chip-y', px(chip.y));
         },
@@ -152,7 +154,15 @@ export default function StagePage() {
     slowTimer = window.setTimeout(() => setSlow(true), INTRO.giveUpAfter * 1000);
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { if (phaseRef.current === 'play') { skip(); e.preventDefault(); } return; }
+      if (e.key === 'Escape') {
+        if (phaseRef.current === 'play') { skip(); e.preventDefault(); return; }
+        if (engine?.isFacingFront) { engine.setFacing(false); setFront(false); e.preventDefault(); }
+        return;
+      }
+      if (e.key === '1' && !e.repeat && !e.altKey && !e.ctrlKey && !e.metaKey && !isTypingTarget(e.target)) {
+        if (phaseRef.current === 'play') skip();
+        engine?.setFacing(true); setFront(true); return;
+      }
       if (e.code !== 'Space' || e.repeat) return;
       if (phaseRef.current !== 'done') { e.preventDefault(); skip(); return; } // during the intro Space = skip, never pause
       if (isTypingTarget(e.target)) return;
@@ -169,16 +179,17 @@ export default function StagePage() {
   }, [params]);
 
   useEffect(() => { engineRef.current?.setReduced(reduced); }, [reduced]);
-  // Key-hint pill: fades out after 5 s without input (once the intro is over), comes back on mouse / key / touch.
-  // Not while paused (the pill then carries the "paused" status) and never under reduced motion (no fade at all, it stays visible at low contrast).
+  // Key hint ("空格 暂停", end of the status line): shown for the first 5 s once the page is entered (intro over), then fades out for good.
+  const shown = ready || !!failed || slow; // the page is really "entered" once the figure (or its placeholder) is there
   useEffect(() => {
-    if (reduced || phase !== 'done' || paused || params.silhouette) { setHintsFaded(false); return; }
-    let timer = window.setTimeout(() => setHintsFaded(true), 5000);
-    const wake = () => { setHintsFaded(false); window.clearTimeout(timer); timer = window.setTimeout(() => setHintsFaded(true), 5000); };
-    const evs = ['mousemove', 'keydown', 'pointerdown', 'touchstart'] as const;
-    evs.forEach(e => window.addEventListener(e, wake, { passive: true }));
-    return () => { window.clearTimeout(timer); evs.forEach(e => window.removeEventListener(e, wake)); };
-  }, [reduced, phase, paused, params.silhouette]);
+    if (phase !== 'done' || !shown || params.silhouette || hintsFaded) return;
+    const timer = window.setTimeout(() => setHintsFaded(true), 5000);
+    return () => window.clearTimeout(timer);
+  }, [phase, shown, params.silhouette, hintsFaded]);
+  const toggleScan = useCallback(() => {
+    const e = engineRef.current; if (!e) return;
+    const next = !e.isFacingFront; e.setFacing(next); setFront(next);
+  }, []);
   useEffect(() => { void engineRef.current?.loadModel(lod); }, [lod]);
 
   // Reduced motion: reveal the page (0.3 s fade) once the model is there, or the model failed / is slow.
@@ -203,10 +214,10 @@ export default function StagePage() {
     {giveUp && !failed && <p role="status" data-stage-waiting className="vz-soft">{t('stage.intro.waiting')}</p>}
     {fpsNotice && <p role="status" data-stage-fps-notice className="vz-soft vz-fps">{t('stage.fps.switched')}</p>}
   </>;
-  const hints = !params.silhouette && <aside aria-label={t('stage.hints')} data-stage-hints data-faded={hintsFaded ? 1 : 0} className="vz-hints">
-    <span><kbd>{t('stage.key.space')}</kbd><span>{t('stage.hint.pause')}</span></span>
-    {(reduced || (paused && !frozenShot)) && <span role="status" data-stage-status>{reduced ? t('stage.reduced') : t('stage.paused')}</span>}
-  </aside>;
+  const statusNote = (reduced || (paused && !frozenShot)) && <span role="status" data-stage-status className="vz-status-note">{reduced ? t('stage.reduced') : t('stage.paused')}</span>;
+  const hints = !params.silhouette && <span aria-label={t('stage.hints')} data-stage-hints data-faded={hintsFaded ? 1 : 0} className="vz-hints">
+    <kbd>{t('stage.key.space')}</kbd><span>{t('stage.hint.pause')}</span>
+  </span>;
   const motesOn = !reduced && !params.silhouette;
   const bg = <>
     <div className="vz-sky" aria-hidden="true"/>
@@ -215,12 +226,13 @@ export default function StagePage() {
     {params.theme === 'b' && <div className="vz-aurora" aria-hidden="true"><i/><i/><i/></div>}
   </>;
   const floor = <div className="vz-ground" aria-hidden="true"><i className="vz-pool"/><i className="vz-shadow"/></div>;
-  const hud = <svg className="vz-hud" aria-hidden="true" focusable="false" viewBox="0 0 200 200" data-stage-hud>
+  // HUD: a faint dashed ground orbit around the feet + four corner brackets framing the figure (box = body height × 1.0 wide, × 1.1 tall).
+  const hud = <svg className="vz-hud" aria-hidden="true" focusable="false" viewBox="0 0 200 200" preserveAspectRatio="none" data-stage-hud>
     <defs><mask id="vz-hud-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
-      <ellipse className="vz-hud-reveal" cx="100" cy="100" rx="82" ry="31" pathLength="1"/>
+      <ellipse className="vz-hud-reveal" cx="100" cy="184" rx="88" ry="11" pathLength="1"/>
     </mask></defs>
-    <ellipse className="vz-hud-orbit" cx="100" cy="100" rx="82" ry="31" transform="rotate(-14 100 100)" mask="url(#vz-hud-mask)"/>
-    <path className="vz-hud-tick" d="M40 30v7M40 30h7M160 30v7M160 30h-7M40 170v-7M40 170h7M160 170v-7M160 170h-7"/>
+    <ellipse className="vz-hud-orbit" cx="100" cy="184" rx="88" ry="11" mask="url(#vz-hud-mask)"/>
+    <path className="vz-hud-tick" d="M22 8v8M22 8h8M178 8v8M178 8h-8M22 196v-8M22 196h8M178 196v-8M178 196h-8"/>
   </svg>;
   const fx = <>
     <div className="vz-halo" aria-hidden="true"/>
@@ -236,7 +248,7 @@ export default function StagePage() {
   };
 
   if (params.bare) {
-    return <main {...rootProps} className="care-page care-bare" data-stage-mode="bare">{bg}{params.silhouette ? null : floor}{stage}{params.silhouette ? null : fx}{status}<div className="vz-dock">{hints}</div></main>;
+    return <main {...rootProps} className="care-page care-bare" data-stage-mode="bare">{bg}{params.silhouette ? null : floor}{stage}{params.silhouette ? null : fx}{status}<div className="vz-dock">{hints}{statusNote}</div></main>;
   }
   const lines = <>
     <span className="vz-line" data-l="1">{t('stage.hero.title1')}</span><span className="vz-line" data-l="2">{t('stage.hero.title2')}</span>
@@ -249,7 +261,10 @@ export default function StagePage() {
         <a href="#top" aria-current="page">{t('stage.nav.home')}</a>
         <a href="#scan">{t('stage.nav.scan')}</a>
         <a href="#about">{t('stage.nav.about')}</a>
-        <a href="#scan" className="vz-nav-cta">{t('stage.nav.start')}</a>
+        <button type="button" role="switch" aria-checked={voice} aria-label={t('stage.nav.voice')} className="vz-nav-mic" onClick={() => setVoice(v => !v)}>
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="6" height="10" rx="3" fill="none" stroke="currentColor" strokeWidth="1.6"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7 17.5h6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+        </button>
+        <a href="#scan" className="vz-nav-cta" onClick={e => { e.preventDefault(); toggleScan(); }}>{t('stage.nav.start')}</a>
       </nav>
     </header>
     <section id="top" className="vz-hero" data-ui>
@@ -260,12 +275,14 @@ export default function StagePage() {
         <p className="vz-sub2" data-sub>{t('stage.hero.sub2')}</p>
       </div>
       <div className="vz-cta">
-        <button type="button" id="scan" className="vz-btn" data-btn>
+        <button type="button" id="scan" className="vz-btn" data-btn aria-pressed={front} data-stage-scan onClick={toggleScan}>
           <i className="vz-pip" aria-hidden="true"/><span>{t('stage.hero.cta')}</span>
           <svg className="vz-arrow" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3.5 10h12M10.5 4.5 16 10l-5.5 5.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
-        <p className="vz-meta" data-btn>{t('stage.hero.meta')}</p>
-        <p className="vz-status" data-btn><i aria-hidden="true"/>{t('stage.status')}</p>
+        <div className="vz-cta-side">
+          <p className="vz-meta" data-btn>{t('stage.hero.meta')}</p>
+          <p className="vz-status" data-btn><i aria-hidden="true"/><span>{t('stage.status')}</span>{hints}{statusNote}</p>
+        </div>
       </div>
     </section>
     {params.theme === 'b' && <ul className="vz-cards" data-ui data-sub>
@@ -276,12 +293,6 @@ export default function StagePage() {
       <span>{t('stage.egg')}</span>
     </p>}
     {status}
-    <div className="vz-dock" data-ui>
-      {hints}
-      <button type="button" role="switch" aria-checked={voice} aria-label={t('stage.nav.voice')} className="vz-mic" onClick={() => setVoice(v => !v)}>
-        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="6" height="10" rx="3" fill="none" stroke="currentColor" strokeWidth="1.6"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7 17.5h6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-      </button>
-    </div>
     <p className="vz-note" data-ui>{t('stage.note')}</p>
     {phase === 'play' && openMode === 'play' && <div className="vz-progress" aria-hidden="true" data-waiting-line/>}
     {phase === 'play' && showSkip && <button type="button" className="vz-skip" data-intro-skip aria-label={t('stage.intro.skipLabel')} onClick={skip}>{t('stage.intro.skip')}</button>}
